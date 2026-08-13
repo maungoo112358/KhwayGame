@@ -1,0 +1,13 @@
+{
+  // Same rules as the app, with one deliberate difference: the DOM lib is swapped for WebWorker.
+  // That leaves OffscreenCanvas, ImageBitmap, Path2D and createImageBitmap available, which the bake needs, while document and window stop existing entirely.
+  // A core file that reaches for the DOM fails to compile instead of failing review.
+  //
+  // "types": [] drops every ambient @types package too, so nothing leaks in that way either.
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "WebWorker"],
+    "types": []
+  },
+  "include": ["."]
+}
