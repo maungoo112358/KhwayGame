@@ -1,5 +1,5 @@
 {
-  "name": "doggame-arch-tools",
+  "name": "khwaygame-arch-tools",
   "private": true,
   "description": "Isolated toolchain for the architecture check. Pins its own TypeScript so the main project can move ahead independently. See D16.",
   "devDependencies": {
