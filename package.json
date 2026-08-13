@@ -5,11 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "npm run typecheck && npm run lint:arch && vite build",
+    "build": "npm run typecheck && npm run lint:arch && npm test && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit && tsc --noEmit -p src/core",
     "lint:arch": "node tools/arch/node_modules/dependency-cruiser/bin/dependency-cruise.mjs src --config .dependency-cruiser.cjs",
-    "test": "vitest",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "postinstall": "cd tools/arch && npm install --silent"
   },
   "dependencies": {
