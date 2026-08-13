@@ -5,10 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "npm run typecheck && vite build",
+    "build": "npm run typecheck && npm run lint:arch && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit && tsc --noEmit -p src/core",
-    "test": "vitest"
+    "lint:arch": "node tools/arch/node_modules/dependency-cruiser/bin/dependency-cruise.mjs src --config .dependency-cruiser.cjs",
+    "test": "vitest",
+    "postinstall": "cd tools/arch && npm install --silent"
   },
   "dependencies": {
     "pixi.js": "^8.19.0"
