@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { chooseGrid, buildLattice, vertexAt, type Point } from './lattice'
 import { warpLattice } from './warp'
-import { buildEdges, horizontalEdge, verticalEdge, type EdgeSet } from './edges'
+import { buildEdges, horizontalEdge, verticalEdge, TAB_PEAK, type EdgeSet } from './edges'
 
 const SEED = 20260818
 
@@ -136,8 +136,8 @@ describe('buildEdges', () => {
     const variance = 0.15
     const edges = buildEdges(lattice, SEED, { size, variance })
 
-    // The authored head peaks at n 0.27, and variance can scale that up by 15%.
-    const ceiling = 0.27 * size * (1 + variance) + 1e-9
+    // The authored head peaks at TAB_PEAK, and variance can scale that up.
+    const ceiling = TAB_PEAK * size * (1 + variance) + 1e-9
     let peak = 0
     let inspected = 0
 
@@ -158,7 +158,9 @@ describe('buildEdges', () => {
     expect(inspected).toBeGreaterThan(10000)
 
     // Without this the ceiling would also pass for a completely flat edge.
-    expect(peak).toBeGreaterThan(0.2)
+    // Pinned from below as well as above, so TAB_PEAK cannot quietly drift away from the profile it claims to describe.
+    expect(peak).toBeGreaterThan(TAB_PEAK * 0.95)
+    expect(peak).toBeLessThanOrEqual(ceiling)
   })
 
   it('points tabs both ways', () => {

@@ -162,8 +162,10 @@ describe('warpLattice', () => {
   })
 
   // The one that proves the division by scale is still there.
-  // Adjacent vertices are 1/scale noise units apart and the field's slope is bounded by 3, so their displacements cannot differ by more than 3/scale of the reach.
-  // White noise neighbours could differ by twice the reach, so dropping the division fails this immediately. Interior vertices only, since a pinned border component is zeroed rather than sampled.
+  //
+  // Adjacent vertices are 1/scale noise units apart and the field's slope is bounded by 4.5, so their displacements cannot differ by more than 4.5/scale of the reach.
+  // That bound was 3 with a single octave and is 4.5 with the detail octave added, for the arithmetic recorded above the constants in warp.ts.
+  // White noise neighbours could differ by twice the reach, which is over the bound for about one pair in sixteen, so dropping the division still fails this in hundreds of places. Interior vertices only, since a pinned border component is zeroed rather than sampled.
   it('moves neighbouring vertices together rather than independently', () => {
     const amplitude = 0.12
     const scale = 3
@@ -175,7 +177,7 @@ describe('warpLattice', () => {
       const after = warpLattice(before, grid, SEED, { amplitude, scale })
 
       const reach = amplitude * Math.min(grid.cellWidth, grid.cellHeight)
-      const allowed = (3 / scale) * reach
+      const allowed = (4.5 / scale) * reach
 
       const shift = (col: number, row: number): Point => ({
         x: vertexAt(after, col, row).x - vertexAt(before, col, row).x,

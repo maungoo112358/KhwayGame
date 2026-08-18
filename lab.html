@@ -39,10 +39,21 @@
       #band {
         font: inherit;
       }
+      #resetView {
+        font: inherit;
+      }
+      canvas {
+        cursor: grab;
+        touch-action: none;
+      }
+      canvas.dragging {
+        cursor: grabbing;
+      }
       #warpValue,
       #tabSizeValue,
       #tabVarianceValue,
-      #gapValue {
+      #gapValue,
+      #zoomValue {
         min-width: 2.5rem;
         opacity: 0.7;
         font-variant-numeric: tabular-nums;
@@ -72,6 +83,8 @@
       <label>Tabs <input id="tabSize" type="range" min="0" max="150" step="5" value="100" /><span id="tabSizeValue"></span></label>
       <label>Variance <input id="tabVariance" type="range" min="0" max="50" step="5" value="15" /><span id="tabVarianceValue"></span></label>
       <label>Gap <input id="gap" type="range" min="0" max="20" step="1" value="5" /><span id="gapValue"></span></label>
+      <button id="resetView" type="button">Reset view</button>
+      <span id="zoomValue"></span>
       <span id="readout"></span>
     </div>
     <div id="output"><canvas id="canvas"></canvas></div>

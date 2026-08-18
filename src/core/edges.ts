@@ -25,17 +25,29 @@ const TAB_START: Local = { t: 0, n: 0 }
 
 // Five cubics: flat, neck out, head, neck back, flat.
 //
-// The only property that actually matters is that the head is wider than the neck. If it is not, the piece slides straight out and this is not a jigsaw.
-// The head's control points sit at t 0.33 and 0.67, well outside its endpoints at 0.45 and 0.55, which is what makes the curve bulge back over the neck.
-// Concretely the head spans about 0.424 to 0.576 while the neck is 0.45 to 0.55, and its peak reaches n 0.27. The test states that as a non monotonic t, which is the same fact said in a way a computer can check.
-// These numbers are a starting point tuned by eye at 2.9, not a claim of correctness.
+// The only property that has to hold is that the head is wider than the neck. If it is not, the piece slides straight out and this is not a jigsaw.
+// The head's control points sit at t 0.30 and 0.70, well outside its endpoints at 0.44 and 0.56, which is what makes the curve bulge back over the neck.
+// Concretely the head spans about 0.410 to 0.590 while the neck is 0.44 to 0.56, and its peak reaches n 0.2725. The test states that as a non monotonic t, which is the same fact in a form a computer can check.
+//
+// Retuned at 2.9 because the first version looked pinched where the neck met the head. Two changes, both about tangents rather than about sizes:
+//   the neck is 0.12 wide rather than 0.10, and it leaves and rejoins the flat line horizontally and reaches the head vertically, so every junction except the head's own flare is smooth
+//   the profile is symmetric about t 0.5, which the first version only roughly was
+// A tab cannot avoid one sharp change of direction: the head has to double back over the neck, and that reversal is what makes it interlock. The aim was to leave exactly that one and remove the rest.
 const TAB_PROFILE: readonly Cubic[] = [
-  { c1: { t: 0.15, n: 0 }, c2: { t: 0.3, n: 0 }, to: { t: 0.4, n: 0 } },
-  { c1: { t: 0.44, n: 0 }, c2: { t: 0.42, n: 0.06 }, to: { t: 0.45, n: 0.12 } },
-  { c1: { t: 0.33, n: 0.32 }, c2: { t: 0.67, n: 0.32 }, to: { t: 0.55, n: 0.12 } },
-  { c1: { t: 0.58, n: 0.06 }, c2: { t: 0.56, n: 0 }, to: { t: 0.6, n: 0 } },
-  { c1: { t: 0.7, n: 0 }, c2: { t: 0.85, n: 0 }, to: { t: 1, n: 0 } },
+  // Flat, leaving the line horizontally.
+  { c1: { t: 0.2, n: 0 }, c2: { t: 0.32, n: 0 }, to: { t: 0.36, n: 0 } },
+  // Neck out. Starts horizontal, arrives at the shoulder vertical.
+  { c1: { t: 0.42, n: 0 }, c2: { t: 0.44, n: 0.07 }, to: { t: 0.44, n: 0.13 } },
+  // The head. Symmetric, and the only place the direction reverses.
+  { c1: { t: 0.3, n: 0.32 }, c2: { t: 0.7, n: 0.32 }, to: { t: 0.56, n: 0.13 } },
+  // Neck back, the mirror of the neck out.
+  { c1: { t: 0.56, n: 0.07 }, c2: { t: 0.58, n: 0 }, to: { t: 0.64, n: 0 } },
+  // Flat, rejoining horizontally.
+  { c1: { t: 0.68, n: 0 }, c2: { t: 0.8, n: 0 }, to: { t: 1, n: 0 } },
 ]
+
+// The head's peak, as a fraction of edge length. Published so the test can bound the reach against the profile rather than against a number copied out of it by hand.
+export const TAB_PEAK = 0.2725
 
 export interface TabOptions {
   // Multiplier on how far the tab reaches off the line. Zero gives straight edges, which is what 2.5 produced.

@@ -26,6 +26,8 @@ const tabVarianceInput = need<HTMLInputElement>('#tabVariance')
 const tabVarianceValue = need<HTMLSpanElement>('#tabVarianceValue')
 const gapInput = need<HTMLInputElement>('#gap')
 const gapValue = need<HTMLSpanElement>('#gapValue')
+const resetViewButton = need<HTMLButtonElement>('#resetView')
+const zoomValue = need<HTMLSpanElement>('#zoomValue')
 const readout = need<HTMLSpanElement>('#readout')
 
 // A function rather than an inline null check, because narrowing a module level const does not follow into function bodies.
@@ -44,6 +46,19 @@ let gap = Number(gapInput.value)
 
 // Fixed, so the same image always cuts the same way and a changed picture is never the seed's fault.
 const SEED = 20260818
+
+const MIN_ZOOM = 1
+const MAX_ZOOM = 40
+const ZOOM_STEP = 1.15
+
+// The view. zoom multiplies the fit-to-window scale, and pan is the content coordinate sitting at the canvas's top left corner.
+// Keeping pan in content coordinates rather than screen pixels means zooming does not have to rescale it.
+let zoom = 1
+let panX = 0
+let panY = 0
+
+// What draw() last computed, so the pointer handlers can convert screen coordinates back into content coordinates without recomputing the fit.
+let viewScale = 1
 
 let image: ImageBitmap | null = null
 let pieces: PieceGeometry[] = []
@@ -69,6 +84,11 @@ function setImage(bitmap: ImageBitmap): void {
     }),
   )
   bandSelect.value = selectedBandId
+
+  // A new image is a new subject, so the old zoom and pan mean nothing. Changing a slider keeps the view, since you are usually watching one spot while you drag.
+  zoom = 1
+  panX = 0
+  panY = 0
 
   rebuild()
 }
@@ -115,18 +135,41 @@ function draw(): void {
   // Reading clientWidth of the parent rather than of the canvas avoids a feedback loop, since a block div's width does not depend on how wide its children are.
   const widthBudget = output.clientWidth
   const heightBudget = Math.max(240, window.innerHeight - output.getBoundingClientRect().top - 40)
-  const scale = Math.min(widthBudget / contentWidth, heightBudget / contentHeight, 1)
+  const fitScale = Math.min(widthBudget / contentWidth, heightBudget / contentHeight, 1)
+  const scale = fitScale * zoom
+  viewScale = scale
+
+  // The canvas is a window onto the content rather than the content itself.
+  // At zoom 1 the drawn size is never bigger than the budget, so it comes out exactly content sized, which is how it behaved before zooming existed.
+  const viewWidth = Math.min(contentWidth * scale, widthBudget)
+  const viewHeight = Math.min(contentHeight * scale, heightBudget)
+
+  // Pan cannot go past the edges of the content, so the puzzle can never be lost off screen.
+  panX = clamp(panX, 0, Math.max(0, contentWidth - viewWidth / scale))
+  panY = clamp(panY, 0, Math.max(0, contentHeight - viewHeight / scale))
 
   // Two different sizes on purpose. The style is in CSS pixels, the attributes are the real pixel buffer, and on a 2x display those differ by the device pixel ratio.
   // Skipping this is what makes canvas lines look soft on a high dpi screen.
   const dpr = window.devicePixelRatio || 1
-  canvas.style.width = `${contentWidth * scale}px`
-  canvas.style.height = `${contentHeight * scale}px`
-  canvas.width = Math.round(contentWidth * scale * dpr)
-  canvas.height = Math.round(contentHeight * scale * dpr)
+  const bufferWidth = Math.round(viewWidth * dpr)
+  const bufferHeight = Math.round(viewHeight * dpr)
+
+  canvas.style.width = `${viewWidth}px`
+  canvas.style.height = `${viewHeight}px`
+
+  // Only reassigned when it actually changed. Writing canvas.width reallocates the buffer, and this now runs on every drag frame.
+  if (canvas.width !== bufferWidth || canvas.height !== bufferHeight) {
+    canvas.width = bufferWidth
+    canvas.height = bufferHeight
+  }
 
   // Assigning canvas.width resets the whole context state, transform included, so this has to come after.
-  context.setTransform(scale * dpr, 0, 0, scale * dpr, 0, 0)
+  // The last two arguments are the translation, which is what pans: shifting the origin left by the panned distance.
+  context.setTransform(1, 0, 0, 1, 0, 0)
+  context.clearRect(0, 0, canvas.width, canvas.height)
+  context.setTransform(scale * dpr, 0, 0, scale * dpr, -panX * scale * dpr, -panY * scale * dpr)
+
+  zoomValue.textContent = `${Math.round(zoom * 100)}%`
 
   // Line widths are in image units and the transform scales them, so a plain 1 would come out as thick as one whole screen pixel per unit of zoom.
   // Dividing by scale cancels that and gives a hairline at any zoom.
@@ -163,6 +206,31 @@ function drawPiece(ctx: CanvasRenderingContext2D, piece: PieceGeometry, source: 
   // The current path survives restore, since it is not part of the saved drawing state, so the outline is still here to stroke.
   ctx.stroke()
   ctx.restore()
+}
+
+function clamp(value: number, low: number, high: number): number {
+  return Math.min(Math.max(value, low), high)
+}
+
+// Zoom about a point rather than about the corner, so whatever is under the cursor stays under the cursor.
+//
+// The content coordinate under the cursor is pan + screenOffset / scale. Holding that fixed while the scale changes and solving for the new pan gives the line below.
+// Zooming about the corner instead is the thing that makes a zoom feel broken: the piece you were looking at slides away as you go in.
+function zoomAbout(screenX: number, screenY: number, factor: number): void {
+  const target = clamp(zoom * factor, MIN_ZOOM, MAX_ZOOM)
+  if (target === zoom) return
+
+  const contentX = panX + screenX / viewScale
+  const contentY = panY + screenY / viewScale
+
+  // viewScale is still the old scale here, so the ratio is how much the scale is about to change by.
+  const newScale = viewScale * (target / zoom)
+
+  panX = contentX - screenX / newScale
+  panY = contentY - screenY / newScale
+  zoom = target
+
+  draw()
 }
 
 // The player supplies the image in the real game, so the lab ships no assets and draws its own stand in.
@@ -225,6 +293,56 @@ gapInput.addEventListener('input', () => {
   draw()
 })
 gapValue.textContent = `${gap}px`
+
+// Wheel to zoom, drag to pan. Neither touches the geometry, so both only redraw.
+canvas.addEventListener(
+  'wheel',
+  (event) => {
+    // Without this the page scrolls instead, and the listener has to be non passive to be allowed to say so.
+    event.preventDefault()
+
+    const bounds = canvas.getBoundingClientRect()
+    zoomAbout(event.clientX - bounds.left, event.clientY - bounds.top, event.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP)
+  },
+  { passive: false },
+)
+
+let dragging: { pointerId: number; x: number; y: number } | null = null
+
+canvas.addEventListener('pointerdown', (event) => {
+  dragging = { pointerId: event.pointerId, x: event.clientX, y: event.clientY }
+
+  // Capture keeps the drag alive when the pointer leaves the canvas, which otherwise makes panning feel like it sticks at the edges.
+  canvas.setPointerCapture(event.pointerId)
+  canvas.classList.add('dragging')
+})
+
+canvas.addEventListener('pointermove', (event) => {
+  if (dragging === null || event.pointerId !== dragging.pointerId) return
+
+  // The drag is measured in screen pixels and pan is in content units, hence the division.
+  panX -= (event.clientX - dragging.x) / viewScale
+  panY -= (event.clientY - dragging.y) / viewScale
+  dragging = { pointerId: event.pointerId, x: event.clientX, y: event.clientY }
+
+  draw()
+})
+
+for (const type of ['pointerup', 'pointercancel']) {
+  canvas.addEventListener(type, () => {
+    dragging = null
+    canvas.classList.remove('dragging')
+  })
+}
+
+resetViewButton.addEventListener('click', resetView)
+
+function resetView(): void {
+  zoom = 1
+  panX = 0
+  panY = 0
+  draw()
+}
 
 window.addEventListener('resize', draw)
 
