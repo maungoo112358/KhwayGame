@@ -64,6 +64,42 @@ export function chooseGrid(targetPieces: number, imageWidth: number, imageHeight
   }
 }
 
+// The three sizes a player may pick from.
+//
+// Asking the player for a number is a lie, because chooseGrid rounds and hands back something else.
+// Offering bands instead means the promise (a puzzle of roughly this size) is kept exactly, and the true count is shown rather than corrected afterwards.
+// Small, medium and large describe the puzzle, not the pieces, so large means the most pieces and the smallest ones.
+export interface PieceCountBand {
+  id: 'small' | 'medium' | 'large'
+  name: string
+  minPieces: number
+  maxPieces: number
+  // What chooseGrid aims at. The band midpoint, kept explicit so it can be tuned without moving the band edges.
+  targetPieces: number
+}
+
+export interface GridOption {
+  band: PieceCountBand
+  grid: Grid
+}
+
+export const PIECE_COUNT_BANDS: readonly PieceCountBand[] = [
+  { id: 'small', name: 'Small', minPieces: 100, maxPieces: 400, targetPieces: 250 },
+  { id: 'medium', name: 'Medium', minPieces: 500, maxPieces: 700, targetPieces: 600 },
+  { id: 'large', name: 'Large', minPieces: 800, maxPieces: 1100, targetPieces: 950 },
+]
+
+// What this particular image can actually be cut into, one grid per band.
+//
+// No new grid picking algorithm, deliberately. A band is a target with a generous tolerance, so this is chooseGrid at the midpoint and nothing more.
+// Rounding moves the count by a few percent at most, and the narrowest band is 200 wide, so the result cannot escape its own band. lattice.test.ts proves that across a sweep of aspect ratios.
+export function gridOptions(imageWidth: number, imageHeight: number): GridOption[] {
+  return PIECE_COUNT_BANDS.map((band) => ({
+    band,
+    grid: chooseGrid(band.targetPieces, imageWidth, imageHeight),
+  }))
+}
+
 // Build the unwarped lattice, in image pixel coordinates.
 // Vertex (0, 0) sits at the top left of the image and vertex (cols, rows) sits exactly on the bottom right corner.
 export function buildLattice(grid: Grid): Lattice {

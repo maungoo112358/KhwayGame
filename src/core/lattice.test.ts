@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { chooseGrid, buildLattice, vertexAt, type Grid } from './lattice'
+import { chooseGrid, buildLattice, vertexAt, gridOptions, PIECE_COUNT_BANDS, type Grid } from './lattice'
 
 const ASPECTS = [
   { name: '1:1 square', w: 1000, h: 1000 },
@@ -188,5 +188,62 @@ describe('vertexAt', () => {
 
     // The dangerous one. A negative column computes a valid index belonging to the previous row, so without a bounds check it would quietly return the wrong vertex.
     expect(() => vertexAt(lattice, -1, 1)).toThrow()
+  })
+})
+
+describe('gridOptions', () => {
+  it('describes bands that make sense on their own', () => {
+    for (const band of PIECE_COUNT_BANDS) {
+      expect(band.minPieces, band.name).toBeLessThan(band.maxPieces)
+      expect(band.targetPieces, band.name).toBeGreaterThanOrEqual(band.minPieces)
+      expect(band.targetPieces, band.name).toBeLessThanOrEqual(band.maxPieces)
+    }
+
+    // Non overlapping and ascending, so a player reading the dropdown top to bottom sees piece counts only go up.
+    for (let i = 1; i < PIECE_COUNT_BANDS.length; i++) {
+      expect(PIECE_COUNT_BANDS[i]!.minPieces).toBeGreaterThan(PIECE_COUNT_BANDS[i - 1]!.maxPieces)
+    }
+  })
+
+  it('offers one grid per band, in ascending order', () => {
+    for (const aspect of ASPECTS) {
+      const options = gridOptions(aspect.w, aspect.h)
+      expect(options, aspect.name).toHaveLength(PIECE_COUNT_BANDS.length)
+
+      for (let i = 1; i < options.length; i++) {
+        expect(options[i]!.grid.pieceCount, `${aspect.name} band ${i}`).toBeGreaterThan(options[i - 1]!.grid.pieceCount)
+      }
+    }
+  })
+
+  // This is the whole promise. The dropdown says "Medium, 500 to 700" and the player must never be handed 480.
+  // chooseGrid rounds two square roots to integers, which moves the count by a few percent, and the narrowest band is 200 wide.
+  // Proving it on three example images would be luck. Sweeping the aspect ratio is the actual gate.
+  it('never escapes its own band, at any aspect ratio', () => {
+    let inspected = 0
+
+    for (let aspect = 0.1; aspect <= 10; aspect += 0.05) {
+      const width = Math.round(1000 * aspect)
+      const height = 1000
+
+      for (const { band, grid } of gridOptions(width, height)) {
+        const where = `${band.name} at aspect ${aspect.toFixed(2)} gave ${grid.pieceCount}`
+        expect(grid.pieceCount, where).toBeGreaterThanOrEqual(band.minPieces)
+        expect(grid.pieceCount, where).toBeLessThanOrEqual(band.maxPieces)
+        inspected++
+      }
+    }
+
+    // Proving the sweep ran. A loop that inspected nothing passes every assertion inside it.
+    expect(inspected).toBeGreaterThan(500)
+  })
+
+  it('keeps cells near square in every band', () => {
+    for (const aspect of ASPECTS) {
+      for (const { band, grid } of gridOptions(aspect.w, aspect.h)) {
+        const cellAspect = grid.cellWidth / grid.cellHeight
+        expect(Math.abs(cellAspect - 1), `${band.name} on ${aspect.name}`).toBeLessThan(0.12)
+      }
+    }
   })
 })
