@@ -219,6 +219,32 @@ describe('cellPaths', () => {
     expect(inspected).toBeGreaterThan(6000)
   })
 
+  // The lab exposes tab size and variance as sliders, so every value they can reach has to be one where the cut still holds together.
+  //
+  // Coverage is the right check for that. A tab large enough to poke out the far side of its neighbour makes two pieces overlap, and one large enough to collide with its own perpendicular edge makes the outline self intersect.
+  // Both change the shoelace answer, so the total drifts off the image area either way.
+  it('still covers the image exactly across every setting the lab can reach', () => {
+    const grid = chooseGrid(600, 1920, 1080)
+    const imageArea = grid.imageWidth * grid.imageHeight
+    let inspected = 0
+
+    for (const amplitude of [0, 0.4]) {
+      const lattice = warpLattice(buildLattice(grid), grid, SEED, { amplitude })
+
+      for (const size of [0, 0.5, 1, 1.5]) {
+        for (const variance of [0, 0.5]) {
+          const pieces = cellPaths(buildEdges(lattice, SEED, { size, variance }))
+          const total = pieces.reduce((sum, piece) => sum + polygonArea(piece.path), 0)
+
+          expect(Math.abs(total - imageArea) / imageArea, `warp ${amplitude}, size ${size}, variance ${variance}`).toBeLessThan(1e-12)
+          inspected++
+        }
+      }
+    }
+
+    expect(inspected).toBe(16)
+  })
+
   // Same property on a warped lattice, since the warp moves every corner the edges are built from.
   it('covers a warped image exactly too', () => {
     const grid = chooseGrid(600, 1920, 1080)

@@ -20,6 +20,12 @@ const fileInput = need<HTMLInputElement>('#file')
 const bandSelect = need<HTMLSelectElement>('#band')
 const warpInput = need<HTMLInputElement>('#warp')
 const warpValue = need<HTMLSpanElement>('#warpValue')
+const tabSizeInput = need<HTMLInputElement>('#tabSize')
+const tabSizeValue = need<HTMLSpanElement>('#tabSizeValue')
+const tabVarianceInput = need<HTMLInputElement>('#tabVariance')
+const tabVarianceValue = need<HTMLSpanElement>('#tabVarianceValue')
+const gapInput = need<HTMLInputElement>('#gap')
+const gapValue = need<HTMLSpanElement>('#gapValue')
 const readout = need<HTMLSpanElement>('#readout')
 
 // A function rather than an inline null check, because narrowing a module level const does not follow into function bodies.
@@ -32,8 +38,9 @@ function context2d(target: HTMLCanvasElement): CanvasRenderingContext2D {
 const context = context2d(canvas)
 
 // How far apart to push neighbouring pieces, in image pixels, so the cut is visible.
-// At zero the pieces tile back into the original image exactly, which is the property lattice.test.ts proves by area.
-const PIECE_GAP = 5
+// At zero the pieces tile back into the original image exactly, which is the property pieces.test.ts proves by area, and is the setting to judge the cut on.
+// Not a geometry knob: changing it only moves pieces around, so it redraws without rebuilding anything.
+let gap = Number(gapInput.value)
 
 // Fixed, so the same image always cuts the same way and a changed picture is never the seed's fault.
 const SEED = 20260818
@@ -72,12 +79,22 @@ function rebuild(): void {
   const chosen = options.find(({ band }) => band.id === selectedBandId)
   if (chosen === undefined) return
 
-  // The slider is in whole percent, warpLattice wants a fraction, and its ceiling of 40 matches MAX_AMPLITUDE.
+  // Sliders are in whole percent and core wants fractions. The warp ceiling of 40 matches MAX_AMPLITUDE and the variance ceiling of 50 matches MAX_VARIANCE.
   const amplitude = Number(warpInput.value) / 100
+  const size = Number(tabSizeInput.value) / 100
+  const variance = Number(tabVarianceInput.value) / 100
+
   warpValue.textContent = `${warpInput.value}%`
+  tabSizeValue.textContent = `${tabSizeInput.value}%`
+  tabVarianceValue.textContent = `${tabVarianceInput.value}%`
 
   // One call. The lab does not know there is a lattice, a noise field or a bezier behind this, which is the entire point of the seam.
-  pieces = createWarpedGridGeometry({ grid: chosen.grid, seed: SEED, warp: { amplitude } }).pieces()
+  pieces = createWarpedGridGeometry({
+    grid: chosen.grid,
+    seed: SEED,
+    warp: { amplitude },
+    tabs: { size, variance },
+  }).pieces()
   columns = chosen.grid.cols
   rows = chosen.grid.rows
 
@@ -91,8 +108,8 @@ function draw(): void {
   if (image === null || pieces.length === 0) return
 
   // Pushing pieces apart makes the drawing wider than the image, so the fit is computed against the exploded size rather than the source.
-  const contentWidth = image.width + (columns - 1) * PIECE_GAP
-  const contentHeight = image.height + (rows - 1) * PIECE_GAP
+  const contentWidth = image.width + (columns - 1) * gap
+  const contentHeight = image.height + (rows - 1) * gap
 
   // Fit inside the width the page gives us and the height left below the controls, and never enlarge past 1:1.
   // Reading clientWidth of the parent rather than of the canvas avoids a feedback loop, since a block div's width does not depend on how wide its children are.
@@ -123,7 +140,7 @@ function draw(): void {
 // Phase 3 moves this into a worker and bakes each piece once into an atlas, and Phase 5 is where the number that justifies all of that gets measured.
 function drawPiece(ctx: CanvasRenderingContext2D, piece: PieceGeometry, source: ImageBitmap): void {
   ctx.save()
-  ctx.translate(piece.col * PIECE_GAP, piece.row * PIECE_GAP)
+  ctx.translate(piece.col * gap, piece.row * gap)
 
   const first = piece.path[0]!
   ctx.beginPath()
@@ -198,6 +215,16 @@ bandSelect.addEventListener('change', () => {
 })
 
 warpInput.addEventListener('input', rebuild)
+tabSizeInput.addEventListener('input', rebuild)
+tabVarianceInput.addEventListener('input', rebuild)
+
+// Geometry does not change, only where the pieces are put, so this redraws without rebuilding.
+gapInput.addEventListener('input', () => {
+  gap = Number(gapInput.value)
+  gapValue.textContent = `${gap}px`
+  draw()
+})
+gapValue.textContent = `${gap}px`
 
 window.addEventListener('resize', draw)
 

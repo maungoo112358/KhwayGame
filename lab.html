@@ -39,10 +39,16 @@
       #band {
         font: inherit;
       }
-      #warpValue {
+      #warpValue,
+      #tabSizeValue,
+      #tabVarianceValue,
+      #gapValue {
         min-width: 2.5rem;
         opacity: 0.7;
         font-variant-numeric: tabular-nums;
+      }
+      #controls input[type='range'] {
+        width: 7rem;
       }
       #readout {
         opacity: 0.7;
@@ -63,6 +69,9 @@
       <label>Image <input id="file" type="file" accept="image/*" /></label>
       <label>Size <select id="band"></select></label>
       <label>Warp <input id="warp" type="range" min="0" max="40" step="1" value="12" /><span id="warpValue"></span></label>
+      <label>Tabs <input id="tabSize" type="range" min="0" max="150" step="5" value="100" /><span id="tabSizeValue"></span></label>
+      <label>Variance <input id="tabVariance" type="range" min="0" max="50" step="5" value="15" /><span id="tabVarianceValue"></span></label>
+      <label>Gap <input id="gap" type="range" min="0" max="20" step="1" value="5" /><span id="gapValue"></span></label>
       <span id="readout"></span>
     </div>
     <div id="output"><canvas id="canvas"></canvas></div>
