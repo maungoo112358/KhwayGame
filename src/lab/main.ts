@@ -1,6 +1,4 @@
-import { buildLattice, cellPaths, gridOptions, type GridOption, type PiecePath } from '../core/lattice'
-import { warpLattice } from '../core/warp'
-import { makeRng } from '../core/rng'
+import { createWarpedGridGeometry, gridOptions, makeRng, type GridOption, type PieceGeometry } from '../core'
 
 // The lab is a separate Vite entry point, not a route inside the game.
 // It may import core/ and a thin slice of render/, and nothing may import it.
@@ -41,7 +39,7 @@ const PIECE_GAP = 5
 const SEED = 20260818
 
 let image: ImageBitmap | null = null
-let pieces: PiecePath[] = []
+let pieces: PieceGeometry[] = []
 let columns = 0
 let rows = 0
 let options: GridOption[] = []
@@ -78,9 +76,8 @@ function rebuild(): void {
   const amplitude = Number(warpInput.value) / 100
   warpValue.textContent = `${warpInput.value}%`
 
-  const warped = warpLattice(buildLattice(chosen.grid), chosen.grid, SEED, { amplitude })
-
-  pieces = cellPaths(warped)
+  // One call. The lab does not know there is a lattice, a noise field or a bezier behind this, which is the entire point of the seam.
+  pieces = createWarpedGridGeometry({ grid: chosen.grid, seed: SEED, warp: { amplitude } }).pieces()
   columns = chosen.grid.cols
   rows = chosen.grid.rows
 
@@ -124,7 +121,7 @@ function draw(): void {
 
 // Deliberately the naive version: one clip and one draw call per piece, on the main thread, every frame.
 // Phase 3 moves this into a worker and bakes each piece once into an atlas, and Phase 5 is where the number that justifies all of that gets measured.
-function drawPiece(ctx: CanvasRenderingContext2D, piece: PiecePath, source: ImageBitmap): void {
+function drawPiece(ctx: CanvasRenderingContext2D, piece: PieceGeometry, source: ImageBitmap): void {
   ctx.save()
   ctx.translate(piece.col * PIECE_GAP, piece.row * PIECE_GAP)
 

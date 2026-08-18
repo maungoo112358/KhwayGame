@@ -42,6 +42,14 @@ module.exports = {
       to: { path: '^src/(render|ui|lab)' },
     },
     {
+      name: 'core-public-surface-only',
+      severity: 'error',
+      comment:
+        'src/core/index.ts is the whole of core\'s public surface. Lattices, noise, warps and beziers are implementation detail, and replacing the warped grid with Voronoi later must not be visible from outside core. It cannot be if nobody outside can name those modules. See D2 and the PieceGeometryProvider seam in docs/ARCHITECTURE.md.',
+      from: { path: '^src/(state|render|ui|lab)' },
+      to: { path: '^src/core/', pathNot: '^src/core/index[.]ts$' },
+    },
+    {
       name: 'nothing-imports-lab',
       severity: 'error',
       comment:

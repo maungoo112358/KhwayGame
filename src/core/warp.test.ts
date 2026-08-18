@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { chooseGrid, buildLattice, cellPaths, vertexAt, type Grid, type Point } from './lattice'
+import { chooseGrid, buildLattice, vertexAt, type Grid, type Point } from './lattice'
 import { warpLattice, MAX_AMPLITUDE } from './warp'
 
 const SEED = 20260818
@@ -80,7 +80,9 @@ describe('warpLattice', () => {
     expect(inspected).toBeGreaterThan(30000)
   })
 
-  // The other half. Ordering alone cannot rule out a bow tie, so every cell is checked for convexity through the paths 2.5 already builds.
+  // The other half. Ordering alone cannot rule out a bow tie, so every cell is checked for convexity at all four corners.
+  //
+  // The quad is read straight from the lattice rather than through cellPath. A finished piece is never convex once it grows tabs, and this is a claim about cells, not about pieces.
   it('keeps every cell convex, at 100, 500 and 1000 pieces', () => {
     let inspected = 0
 
@@ -89,13 +91,21 @@ describe('warpLattice', () => {
         for (const amplitude of AMPLITUDES) {
           const { lattice } = warpedGrid(target, aspect.w, aspect.h, amplitude)
 
-          for (const piece of cellPaths(lattice)) {
-            const path = piece.path
-            for (let i = 0; i < path.length; i++) {
-              const turn = cross(path[i]!, path[(i + 1) % path.length]!, path[(i + 2) % path.length]!)
-              expect(turn, `${aspect.name} at ${target}, amplitude ${amplitude}, piece ${piece.id} corner ${i}`).toBeGreaterThan(0)
+          for (let row = 0; row < lattice.rows; row++) {
+            for (let col = 0; col < lattice.cols; col++) {
+              const quad = [
+                vertexAt(lattice, col, row),
+                vertexAt(lattice, col + 1, row),
+                vertexAt(lattice, col + 1, row + 1),
+                vertexAt(lattice, col, row + 1),
+              ]
+
+              for (let i = 0; i < quad.length; i++) {
+                const turn = cross(quad[i]!, quad[(i + 1) % quad.length]!, quad[(i + 2) % quad.length]!)
+                expect(turn, `${aspect.name} at ${target}, amplitude ${amplitude}, cell ${col},${row} corner ${i}`).toBeGreaterThan(0)
+              }
+              inspected++
             }
-            inspected++
           }
         }
       }
