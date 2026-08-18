@@ -1,4 +1,5 @@
-import { buildLattice, vertexAt, gridOptions, type GridOption, type Lattice } from '../core/lattice'
+import { buildLattice, cellPaths, gridOptions, type GridOption, type PiecePath } from '../core/lattice'
+import { warpLattice } from '../core/warp'
 import { makeRng } from '../core/rng'
 
 // The lab is a separate Vite entry point, not a route inside the game.
@@ -19,6 +20,8 @@ const canvas = need<HTMLCanvasElement>('#canvas')
 const output = need<HTMLDivElement>('#output')
 const fileInput = need<HTMLInputElement>('#file')
 const bandSelect = need<HTMLSelectElement>('#band')
+const warpInput = need<HTMLInputElement>('#warp')
+const warpValue = need<HTMLSpanElement>('#warpValue')
 const readout = need<HTMLSpanElement>('#readout')
 
 // A function rather than an inline null check, because narrowing a module level const does not follow into function bodies.
@@ -30,8 +33,17 @@ function context2d(target: HTMLCanvasElement): CanvasRenderingContext2D {
 
 const context = context2d(canvas)
 
+// How far apart to push neighbouring pieces, in image pixels, so the cut is visible.
+// At zero the pieces tile back into the original image exactly, which is the property lattice.test.ts proves by area.
+const PIECE_GAP = 5
+
+// Fixed, so the same image always cuts the same way and a changed picture is never the seed's fault.
+const SEED = 20260818
+
 let image: ImageBitmap | null = null
-let lattice: Lattice | null = null
+let pieces: PiecePath[] = []
+let columns = 0
+let rows = 0
 let options: GridOption[] = []
 
 // Which band the player picked, kept across image changes so choosing a new photo does not silently reset the size.
@@ -62,7 +74,15 @@ function rebuild(): void {
   const chosen = options.find(({ band }) => band.id === selectedBandId)
   if (chosen === undefined) return
 
-  lattice = buildLattice(chosen.grid)
+  // The slider is in whole percent, warpLattice wants a fraction, and its ceiling of 40 matches MAX_AMPLITUDE.
+  const amplitude = Number(warpInput.value) / 100
+  warpValue.textContent = `${warpInput.value}%`
+
+  const warped = warpLattice(buildLattice(chosen.grid), chosen.grid, SEED, { amplitude })
+
+  pieces = cellPaths(warped)
+  columns = chosen.grid.cols
+  rows = chosen.grid.rows
 
   // The count is on the dropdown itself, so this carries only what the dropdown cannot.
   readout.textContent = `cells ${chosen.grid.cellWidth.toFixed(1)} by ${chosen.grid.cellHeight.toFixed(1)} image px, source ${image.width} by ${image.height}`
@@ -71,72 +91,64 @@ function rebuild(): void {
 }
 
 function draw(): void {
-  if (image === null || lattice === null) return
+  if (image === null || pieces.length === 0) return
+
+  // Pushing pieces apart makes the drawing wider than the image, so the fit is computed against the exploded size rather than the source.
+  const contentWidth = image.width + (columns - 1) * PIECE_GAP
+  const contentHeight = image.height + (rows - 1) * PIECE_GAP
 
   // Fit inside the width the page gives us and the height left below the controls, and never enlarge past 1:1.
   // Reading clientWidth of the parent rather than of the canvas avoids a feedback loop, since a block div's width does not depend on how wide its children are.
   const widthBudget = output.clientWidth
   const heightBudget = Math.max(240, window.innerHeight - output.getBoundingClientRect().top - 40)
-  const scale = Math.min(widthBudget / image.width, heightBudget / image.height, 1)
+  const scale = Math.min(widthBudget / contentWidth, heightBudget / contentHeight, 1)
 
   // Two different sizes on purpose. The style is in CSS pixels, the attributes are the real pixel buffer, and on a 2x display those differ by the device pixel ratio.
   // Skipping this is what makes canvas lines look soft on a high dpi screen.
   const dpr = window.devicePixelRatio || 1
-  canvas.style.width = `${image.width * scale}px`
-  canvas.style.height = `${image.height * scale}px`
-  canvas.width = Math.round(image.width * scale * dpr)
-  canvas.height = Math.round(image.height * scale * dpr)
+  canvas.style.width = `${contentWidth * scale}px`
+  canvas.style.height = `${contentHeight * scale}px`
+  canvas.width = Math.round(contentWidth * scale * dpr)
+  canvas.height = Math.round(contentHeight * scale * dpr)
 
   // Assigning canvas.width resets the whole context state, transform included, so this has to come after.
   context.setTransform(scale * dpr, 0, 0, scale * dpr, 0, 0)
-  context.drawImage(image, 0, 0)
 
-  strokeLattice(context, lattice, scale)
-}
-
-function strokeLattice(ctx: CanvasRenderingContext2D, grid: Lattice, scale: number): void {
   // Line widths are in image units and the transform scales them, so a plain 1 would come out as thick as one whole screen pixel per unit of zoom.
   // Dividing by scale cancels that and gives a hairline at any zoom.
-  const hairline = 1 / scale
+  context.lineWidth = 1 / scale
+  context.strokeStyle = 'rgb(30 26 22 / 0.35)'
 
-  // Polylines through the vertices rather than a rectangle per cell.
-  // They are straight today because the lattice is unwarped, and they will bend at every vertex on their own once the warp lands in 2.6.
-  ctx.beginPath()
-  for (let row = 0; row <= grid.rows; row++) {
-    for (let col = 0; col <= grid.cols; col++) {
-      const point = vertexAt(grid, col, row)
-      if (col === 0) ctx.moveTo(point.x, point.y)
-      else ctx.lineTo(point.x, point.y)
-    }
-  }
-  for (let col = 0; col <= grid.cols; col++) {
-    for (let row = 0; row <= grid.rows; row++) {
-      const point = vertexAt(grid, col, row)
-      if (row === 0) ctx.moveTo(point.x, point.y)
-      else ctx.lineTo(point.x, point.y)
-    }
-  }
-  ctx.strokeStyle = 'rgb(40 36 32 / 0.5)'
-  ctx.lineWidth = hairline
-  ctx.stroke()
-
-  // The outer ring, walked vertex by vertex rather than drawn as a rectangle, so it shows where the lattice actually is instead of where we assume it is.
-  // This is the gate: it must hug the photo exactly, with no gap and no overhang.
-  ctx.beginPath()
-  for (let col = 0; col <= grid.cols; col++) traceTo(ctx, grid, col, 0)
-  for (let row = 1; row <= grid.rows; row++) traceTo(ctx, grid, grid.cols, row)
-  for (let col = grid.cols - 1; col >= 0; col--) traceTo(ctx, grid, col, grid.rows)
-  for (let row = grid.rows - 1; row >= 0; row--) traceTo(ctx, grid, 0, row)
-  ctx.closePath()
-  ctx.strokeStyle = '#b4432c'
-  ctx.lineWidth = hairline * 2
-  ctx.stroke()
+  for (const piece of pieces) drawPiece(context, piece, image)
 }
 
-function traceTo(ctx: CanvasRenderingContext2D, grid: Lattice, col: number, row: number): void {
-  const point = vertexAt(grid, col, row)
-  if (col === 0 && row === 0) ctx.moveTo(point.x, point.y)
-  else ctx.lineTo(point.x, point.y)
+// Deliberately the naive version: one clip and one draw call per piece, on the main thread, every frame.
+// Phase 3 moves this into a worker and bakes each piece once into an atlas, and Phase 5 is where the number that justifies all of that gets measured.
+function drawPiece(ctx: CanvasRenderingContext2D, piece: PiecePath, source: ImageBitmap): void {
+  ctx.save()
+  ctx.translate(piece.col * PIECE_GAP, piece.row * PIECE_GAP)
+
+  const first = piece.path[0]!
+  ctx.beginPath()
+  ctx.moveTo(first.x, first.y)
+  for (let i = 1; i < piece.path.length; i++) {
+    const point = piece.path[i]!
+    ctx.lineTo(point.x, point.y)
+  }
+  ctx.closePath()
+
+  // A clip cannot be narrowed back out, only unwound by restore, hence the inner pair.
+  ctx.save()
+  ctx.clip()
+
+  // The bbox is what makes this cheap. Without it every piece would redraw the whole source image and only keep the sliver inside the clip.
+  const box = piece.bbox
+  ctx.drawImage(source, box.x, box.y, box.width, box.height, box.x, box.y, box.width, box.height)
+  ctx.restore()
+
+  // The current path survives restore, since it is not part of the saved drawing state, so the outline is still here to stroke.
+  ctx.stroke()
+  ctx.restore()
 }
 
 // The player supplies the image in the real game, so the lab ships no assets and draws its own stand in.
@@ -187,6 +199,8 @@ bandSelect.addEventListener('change', () => {
   selectedBandId = bandSelect.value
   rebuild()
 })
+
+warpInput.addEventListener('input', rebuild)
 
 window.addEventListener('resize', draw)
 
