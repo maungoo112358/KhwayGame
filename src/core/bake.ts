@@ -5,17 +5,17 @@
 // Shaped like printTreat: opens its own OffscreenCanvas, draws, hands back a transferred ImageBitmap.
 // Worker safe by construction, the same way ingest and print treatment were before they had to move.
 //
-// Both the rim and the crush stroke are lit from the piece's own top left corner to its bottom right,
-// the same fixed light direction as the rest of the game, using a canvas linear gradient across the
-// piece's bounding box rather than computing an outward normal at every point of an irregular, warped,
-// tabbed outline. A gradient does not know or care which way an edge is actually facing, it just
-// answers "how far toward the lit corner is this pixel," which is enough to read as directional light
-// without the geometry cost, and its softness suits the game's overcast, no-hard-shadows art direction
-// better than a precise per-edge highlight would.
+// The rim is lit from the piece's own top left corner to its bottom right, the same fixed light
+// direction as the rest of the game, using a canvas linear gradient across the piece's bounding box
+// rather than computing an outward normal at every point of an irregular, warped, tabbed outline.
 //
-// The colours below are pushed well past docs/ART-DIRECTION.md's real numbers on purpose, so the effect
-// is unambiguous while the mechanism itself is being judged. Softening them back down to the cozy,
-// subtle version is a separate, later pass once the technique is confirmed to read as depth at all.
+// The crush stroke's upper left highlight from docs/ARCHITECTURE.md is deliberately not implemented
+// here. It was built, tested with a real photo, and dropped: the same gradient technique that lights the
+// rim well does not generalise across piece shapes for a thin highlight stroke. A border piece's long
+// straight edges sit close to the lit corner along their whole length and the highlight swallowed real
+// image content, while an interior piece's tab covered outline stays far enough from the corner that the
+// same settings showed nothing at all. No single width or reach served both. See D21 in
+// docs/DECISIONS.md for the full account and the condition for revisiting it.
 
 import type { PieceGeometry } from './geometry'
 import type { Point } from './lattice'
@@ -31,10 +31,6 @@ export interface CardboardOptions {
   crushWidth?: number
   // Alpha of the crush stroke. Present on every edge, regardless of which way it faces.
   crushAlpha?: number
-  // Width of the highlight stroke layered on top of the crush stroke, on the lit side only.
-  highlightWidth?: number
-  // Alpha of the highlight at its brightest, fading to zero by the shadowed corner.
-  highlightAlpha?: number
 }
 
 const DEFAULT_RIM_COLOR_LIGHT = '#E8D9BE'
@@ -42,8 +38,6 @@ const DEFAULT_RIM_COLOR_DARK = '#7C6448'
 const DEFAULT_RIM_OFFSET = 6
 const DEFAULT_CRUSH_WIDTH = 2
 const DEFAULT_CRUSH_ALPHA = 0.5
-const DEFAULT_HIGHLIGHT_WIDTH = 2.5
-const DEFAULT_HIGHLIGHT_ALPHA = 0.95
 
 function outlinePath(points: Point[]): Path2D {
   const path = new Path2D()
@@ -63,8 +57,6 @@ export function bakePiece(piece: PieceGeometry, image: ImageBitmap, options: Car
   const rimOffset = options.rimOffset ?? DEFAULT_RIM_OFFSET
   const crushWidth = options.crushWidth ?? DEFAULT_CRUSH_WIDTH
   const crushAlpha = options.crushAlpha ?? DEFAULT_CRUSH_ALPHA
-  const highlightWidth = options.highlightWidth ?? DEFAULT_HIGHLIGHT_WIDTH
-  const highlightAlpha = options.highlightAlpha ?? DEFAULT_HIGHLIGHT_ALPHA
 
   // Only down and right need extra room: the rim is offset that way, and the top face and crush stroke
   // both sit exactly on the piece's own bbox.
@@ -101,17 +93,6 @@ export function bakePiece(piece: PieceGeometry, image: ImageBitmap, options: Car
   // Layer 3: the die cut crush, traced along the same outline the clip used, present all the way round.
   ctx.lineWidth = crushWidth
   ctx.strokeStyle = `rgb(0 0 0 / ${crushAlpha})`
-  ctx.stroke(outline)
-
-  // Layer 4: the highlight, a second stroke on top that only brightens the lit corner. The gradient fades
-  // to fully transparent by the midpoint, so the shadowed corner is untouched and still shows the crush.
-  const highlightGradient = ctx.createLinearGradient(box.x, box.y, box.x + box.width, box.y + box.height)
-  highlightGradient.addColorStop(0, `rgb(255 255 255 / ${highlightAlpha})`)
-  highlightGradient.addColorStop(0.45, 'rgb(255 255 255 / 0)')
-  highlightGradient.addColorStop(1, 'rgb(255 255 255 / 0)')
-
-  ctx.lineWidth = highlightWidth
-  ctx.strokeStyle = highlightGradient
   ctx.stroke(outline)
 
   return canvas.transferToImageBitmap()
