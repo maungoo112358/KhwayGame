@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "npm run typecheck && npm run lint:arch && npm test && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p src/core",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p src/core && tsc --noEmit -p src/worker",
     "lint:arch": "node tools/arch/node_modules/dependency-cruiser/bin/dependency-cruise.mjs src --config .dependency-cruiser.cjs",
     "test": "vitest run",
     "test:watch": "vitest",

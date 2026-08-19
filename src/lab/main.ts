@@ -2,15 +2,14 @@ import {
   chooseGrid,
   createWarpedGridGeometry,
   gridOptions,
-  ingestImage,
   makeRng,
-  printTreat,
   workingSize,
   type Grid,
   type GridOption,
   type PieceGeometry,
   type WorkingSize,
 } from '../core'
+import type { TreatRequest, TreatResponse } from '../worker/protocol'
 
 // The lab is a separate Vite entry point, not a route inside the game.
 // It may import core/ and a thin slice of render/, and nothing may import it.
@@ -125,17 +124,50 @@ async function applyBand(): Promise<void> {
 
   const size = workingSize(chosen.grid)
 
-  plain = await ingestImage(source, size)
-
+  // `source` is kept alive here for the next band change, so the worker gets an independent copy to consume.
   // Timed because this is the first pass in the project that touches every pixel, and 3.6 has a five second budget for the whole bake.
-  const started = performance.now()
-  printed = printTreat(plain)
-  const printMs = performance.now() - started
+  const clone = await createImageBitmap(source)
+  const result = await treatInWorker(clone, size)
+
+  plain = result.plain
+  printed = result.printed
 
   workingGrid = chooseGrid(chosen.band.targetPieces, size.width, size.height)
 
-  reportIngest(chosen.grid, size, printMs)
+  reportIngest(chosen.grid, size, result.printMs)
   rebuild()
+}
+
+// One worker for the lab's whole lifetime. There is never more than one treat in flight, so no pool is needed yet.
+const treatWorker = new Worker(new URL('../worker/treat-worker.ts', import.meta.url), { type: 'module' })
+
+function treatInWorker(source: ImageBitmap, size: WorkingSize): Promise<{ plain: ImageBitmap; printed: ImageBitmap; printMs: number }> {
+  return new Promise((resolve, reject) => {
+    function handleMessage(event: MessageEvent<TreatResponse>): void {
+      const message = event.data
+      if (message.type === 'progress') {
+        readout.textContent = `${message.stage}...`
+        return
+      }
+
+      treatWorker.removeEventListener('message', handleMessage)
+      if (message.type === 'error') {
+        reject(new Error(message.message))
+      } else {
+        resolve(message)
+      }
+    }
+
+    treatWorker.addEventListener('message', handleMessage)
+
+    const request: TreatRequest = { type: 'treat', source, size }
+    treatWorker.postMessage(request, [source])
+
+    // Proof rather than assumption: a transferred bitmap is neutered on this side the instant postMessage returns.
+    if (source.width !== 0) {
+      throw new Error('treat worker transfer did not neuter the source bitmap, zero copy gate failed')
+    }
+  })
 }
 
 function reportIngest(sourceGrid: Grid, size: WorkingSize, printMs: number): void {

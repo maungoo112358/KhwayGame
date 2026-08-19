@@ -17,5 +17,7 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["src", "vite.config.ts"]
+  "include": ["src", "vite.config.ts"],
+  // Checked separately by src/worker/tsconfig.json under the WebWorker lib instead, see that file's comment.
+  "exclude": ["src/worker/treat-worker.ts"]
 }

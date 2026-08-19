@@ -1,0 +1,12 @@
+{
+  // Same rules as the app, with the DOM lib swapped for WebWorker, same reasoning as src/core/tsconfig.json.
+  // Unlike core, treat-worker.ts also calls postMessage and self.onmessage directly, and those only type-check
+  // correctly under WebWorker: Window.postMessage takes a different second argument than a worker's does.
+  // So this file is excluded from the root tsconfig rather than double-checked the way core is, see its "exclude".
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2022", "WebWorker"],
+    "types": []
+  },
+  "include": ["."]
+}
