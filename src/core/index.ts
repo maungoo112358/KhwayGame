@@ -32,6 +32,15 @@ export type { PieceGeometry, PieceGeometryProvider, GeometryOptions, Neighbors }
 export { bakePiece } from './bake'
 export type { CardboardOptions } from './bake'
 
+// Atlas packing. Rectangle sizes in, sheet assignments and positions out. No pixels touched here.
+export { packAtlas } from './atlas'
+export type { AtlasRect, AtlasPlacement, AtlasResult, AtlasOptions } from './atlas'
+
+// The whole puzzle's worth of baking and packing, chained: bake every piece, pack them, composite the
+// real atlas sheets.
+export { assembleAtlases } from './assemble'
+export type { AssembleOptions, AssembledPiece, AssembledAtlases } from './assemble'
+
 // Seeded randomness. Published on purpose rather than leaked: determinism is a project wide requirement, not a geometry one, and a consumer that needs a repeatable sequence should use this rather than roll its own.
 // Swapping the warped grid for Voronoi would not touch this, which is the test for whether something belongs on this surface.
 export { makeRng, deriveSeed } from './rng'

@@ -10,7 +10,7 @@ import {
   type PieceGeometry,
   type WorkingSize,
 } from '../core'
-import type { TreatRequest, TreatResponse } from '../worker/protocol'
+import type { BakeRequest, BakeResponse, TreatRequest, TreatResponse } from '../worker/protocol'
 
 // The lab is a separate Vite entry point, not a route inside the game.
 // It may import core/ and a thin slice of render/, and nothing may import it.
@@ -43,6 +43,8 @@ const pieceControls = need<HTMLSpanElement>('#pieceControls')
 const bakePreviewInput = need<HTMLInputElement>('#bakePreview')
 const backToPuzzleButton = need<HTMLButtonElement>('#backToPuzzle')
 const resetViewButton = need<HTMLButtonElement>('#resetView')
+const bakeFullButton = need<HTMLButtonElement>('#bakeFull')
+const closeAtlasButton = need<HTMLButtonElement>('#closeAtlas')
 const zoomValue = need<HTMLSpanElement>('#zoomValue')
 const readout = need<HTMLSpanElement>('#readout')
 
@@ -92,6 +94,10 @@ let isolatedIndex: number | null = null
 // null whenever nothing is isolated or the toggle is off.
 let bakedPiece: ImageBitmap | null = null
 
+// The real atlas sheets from a full bake, empty until "Bake full puzzle" is clicked. Takes over the
+// whole canvas when present, above even the isolated piece view.
+let atlasSheets: ImageBitmap[] = []
+
 let pieces: PieceGeometry[] = []
 // One Path2D per piece, in image space with the gap explosion already baked in, so a double click can
 // be tested against them directly. Rebuilt whenever geometry or gap changes, not on every pointer move.
@@ -124,10 +130,13 @@ function setImage(bitmap: ImageBitmap): void {
   panX = 0
   panY = 0
 
-  // Whatever was isolated belonged to the old image's geometry, and no longer means anything.
+  // Whatever was isolated, or baked, belonged to the old image's geometry, and no longer means anything.
   isolatedIndex = null
   pieceControls.style.display = 'none'
   bakePreviewInput.checked = false
+  for (const sheet of atlasSheets) sheet.close()
+  atlasSheets = []
+  closeAtlasButton.style.display = 'none'
 
   void applyBand()
 }
@@ -292,6 +301,86 @@ function updateBakePreview(): void {
   bakedPiece = bakePiece(piece, image)
 }
 
+function closeAtlasView(): void {
+  for (const sheet of atlasSheets) sheet.close()
+  atlasSheets = []
+  closeAtlasButton.style.display = 'none'
+
+  zoom = 1
+  panX = 0
+  panY = 0
+  draw()
+}
+
+// Sends the whole current puzzle, geometry and all, to the worker for a real bake: every piece baked,
+// packed, and composited into real atlas sheets. The worker rebuilds geometry itself from grid, seed and
+// the current slider values rather than the lab shipping its already built pieces array across, since
+// PieceGeometry is a plain object graph the worker can reconstruct identically from the same seed anyway.
+async function bakeFullPuzzle(): Promise<void> {
+  if (workingGrid === null) return
+
+  const image = printInput.checked ? printed : plain
+  if (image === null) return
+
+  if (isolatedIndex !== null) exitIsolation()
+
+  const clone = await createImageBitmap(image)
+
+  const request: BakeRequest = {
+    type: 'bake',
+    image: clone,
+    grid: workingGrid,
+    seed: SEED,
+    warp: { amplitude: Number(warpInput.value) / 100 },
+    tabs: { size: Number(tabSizeInput.value) / 100, variance: Number(tabVarianceInput.value) / 100 },
+  }
+
+  bakeFullButton.disabled = true
+  readout.textContent = 'baking...'
+
+  try {
+    const response = await new Promise<BakeResponse & { type: 'result' }>((resolve, reject) => {
+      function handleMessage(event: MessageEvent<BakeResponse>): void {
+        const message = event.data
+        if (message.type === 'progress') {
+          readout.textContent = `baking ${message.completed} of ${message.total} pieces...`
+          return
+        }
+
+        treatWorker.removeEventListener('message', handleMessage)
+        if (message.type === 'error') {
+          reject(new Error(message.message))
+        } else {
+          resolve(message)
+        }
+      }
+
+      treatWorker.addEventListener('message', handleMessage)
+      treatWorker.postMessage(request, [clone])
+
+      // Same zero copy proof as treatInWorker: the clone must be dead on this side the instant postMessage returns.
+      if (clone.width !== 0) {
+        throw new Error('bake worker transfer did not neuter the source bitmap, zero copy gate failed')
+      }
+    })
+
+    for (const sheet of atlasSheets) sheet.close()
+    atlasSheets = response.atlases
+
+    const pieceCount = response.pieces.length
+    const sheetWord = response.atlases.length === 1 ? 'sheet' : 'sheets'
+    readout.textContent = `baked ${pieceCount} pieces into ${response.atlases.length} ${sheetWord} in ${response.bakeMs.toFixed(0)}ms`
+
+    closeAtlasButton.style.display = ''
+    zoom = 1
+    panX = 0
+    panY = 0
+    draw()
+  } finally {
+    bakeFullButton.disabled = false
+  }
+}
+
 // Shared by the whole puzzle view and the isolated single piece view: fits content to the viewport,
 // sets up the transform, then hands back to the caller to paint in content coordinates.
 //
@@ -342,7 +431,25 @@ function drawContent(contentWidth: number, contentHeight: number, allowUpscale: 
   paint()
 }
 
+// How far apart the atlas sheets sit from each other in the atlas view. Not the piece gap slider, that
+// means something else, exploding pieces apart within one sheet, not spacing whole sheets apart.
+const ATLAS_GAP = 24
+
 function draw(): void {
+  if (atlasSheets.length > 0) {
+    const contentWidth = atlasSheets.reduce((sum, sheet) => sum + sheet.width, 0) + (atlasSheets.length - 1) * ATLAS_GAP
+    const contentHeight = Math.max(...atlasSheets.map((sheet) => sheet.height))
+
+    drawContent(contentWidth, contentHeight, false, () => {
+      let x = 0
+      for (const sheet of atlasSheets) {
+        context.drawImage(sheet, x, 0)
+        x += sheet.width + ATLAS_GAP
+      }
+    })
+    return
+  }
+
   // Which of the two working images to draw. The pieces are identical either way, since the treatment changes colour and not geometry.
   const image = printInput.checked ? printed : plain
   if (image === null || pieces.length === 0) return
@@ -580,6 +687,12 @@ bakePreviewInput.addEventListener('change', () => {
 })
 
 resetViewButton.addEventListener('click', resetView)
+
+bakeFullButton.addEventListener('click', () => {
+  void bakeFullPuzzle()
+})
+
+closeAtlasButton.addEventListener('click', closeAtlasView)
 
 function resetView(): void {
   zoom = 1
