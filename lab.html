@@ -67,14 +67,17 @@
       }
       canvas {
         display: block;
-        background: #cfc5b4;
+        /* The real board backdrop from docs/ART-DIRECTION.md, deliberately a cooler, distinct tone from
+           the rim's warm beige, so a baked rim shows up against it instead of blending in. The previous
+           value, #cfc5b4, was nearly identical to the rim colour and made the rim unreadable here. */
+        background: #dcdcd2;
         box-shadow: 0 1px 4px rgb(0 0 0 / 0.25);
       }
     </style>
   </head>
   <body>
     <h1>Puzzle cut lab</h1>
-    <p>Standalone dev harness. Imports core only, never the game UI.</p>
+    <p>Standalone dev harness. Imports core only, never the game UI. Double-click a piece to inspect it.</p>
 
     <div id="controls">
       <label>Image <input id="file" type="file" accept="image/*" /></label>
@@ -84,6 +87,10 @@
       <label>Variance <input id="tabVariance" type="range" min="0" max="50" step="5" value="15" /><span id="tabVarianceValue"></span></label>
       <label>Gap <input id="gap" type="range" min="0" max="20" step="1" value="5" /><span id="gapValue"></span></label>
       <label><input id="print" type="checkbox" checked /> Print treatment</label>
+      <span id="pieceControls" style="display: none">
+        <label><input id="bakePreview" type="checkbox" /> Bake preview</label>
+        <button id="backToPuzzle" type="button">Back to puzzle</button>
+      </span>
       <button id="resetView" type="button">Reset view</button>
       <span id="zoomValue"></span>
       <span id="readout"></span>

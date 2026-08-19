@@ -1,4 +1,5 @@
 import {
+  bakePiece,
   chooseGrid,
   createWarpedGridGeometry,
   gridOptions,
@@ -38,6 +39,9 @@ const tabVarianceValue = need<HTMLSpanElement>('#tabVarianceValue')
 const gapInput = need<HTMLInputElement>('#gap')
 const gapValue = need<HTMLSpanElement>('#gapValue')
 const printInput = need<HTMLInputElement>('#print')
+const pieceControls = need<HTMLSpanElement>('#pieceControls')
+const bakePreviewInput = need<HTMLInputElement>('#bakePreview')
+const backToPuzzleButton = need<HTMLButtonElement>('#backToPuzzle')
 const resetViewButton = need<HTMLButtonElement>('#resetView')
 const zoomValue = need<HTMLSpanElement>('#zoomValue')
 const readout = need<HTMLSpanElement>('#readout')
@@ -80,7 +84,18 @@ let plain: ImageBitmap | null = null
 let printed: ImageBitmap | null = null
 let workingGrid: Grid | null = null
 
+// Which piece, if any, is isolated for inspection. An index into pieces, not an id, since that is what
+// both the pieces and hitPaths arrays are keyed by.
+let isolatedIndex: number | null = null
+
+// The baked cardboard for the isolated piece only, rebuilt whenever it, or the treated image, changes.
+// null whenever nothing is isolated or the toggle is off.
+let bakedPiece: ImageBitmap | null = null
+
 let pieces: PieceGeometry[] = []
+// One Path2D per piece, in image space with the gap explosion already baked in, so a double click can
+// be tested against them directly. Rebuilt whenever geometry or gap changes, not on every pointer move.
+let hitPaths: Path2D[] = []
 let columns = 0
 let rows = 0
 let options: GridOption[] = []
@@ -108,6 +123,11 @@ function setImage(bitmap: ImageBitmap): void {
   zoom = 1
   panX = 0
   panY = 0
+
+  // Whatever was isolated belonged to the old image's geometry, and no longer means anything.
+  isolatedIndex = null
+  pieceControls.style.display = 'none'
+  bakePreviewInput.checked = false
 
   void applyBand()
 }
@@ -203,23 +223,87 @@ function rebuild(): void {
   columns = workingGrid.cols
   rows = workingGrid.rows
 
+  rebuildHitPaths()
+
+  // The old selection may no longer exist, a smaller band can shrink pieces.length past it.
+  if (isolatedIndex !== null && isolatedIndex >= pieces.length) exitIsolation()
+
+  updateBakePreview()
   draw()
 }
 
-function draw(): void {
-  // Which of the two working images to draw. The pieces are identical either way, since the treatment changes colour and not geometry.
+// One Path2D per piece so a double click can be tested with isPointInPath instead of hand rolled point
+// in polygon math. Coordinates already include the gap explosion, matching exactly where drawPiece puts
+// each piece, so a hit test and a draw never disagree about where a piece actually is.
+function rebuildHitPaths(): void {
+  hitPaths = pieces.map((piece) => {
+    const path = new Path2D()
+    const dx = piece.col * gap
+    const dy = piece.row * gap
+    const first = piece.path[0]!
+    path.moveTo(first.x + dx, first.y + dy)
+    for (let i = 1; i < piece.path.length; i++) {
+      const point = piece.path[i]!
+      path.lineTo(point.x + dx, point.y + dy)
+    }
+    path.closePath()
+    return path
+  })
+}
+
+function enterIsolation(index: number): void {
+  isolatedIndex = index
+  zoom = 1
+  panX = 0
+  panY = 0
+  pieceControls.style.display = ''
+  bakePreviewInput.checked = false
+  updateBakePreview()
+  draw()
+}
+
+function exitIsolation(): void {
+  isolatedIndex = null
+  zoom = 1
+  panX = 0
+  panY = 0
+  pieceControls.style.display = 'none'
+  bakePreviewInput.checked = false
+  updateBakePreview()
+  draw()
+}
+
+// Only the isolated piece is ever baked, not the whole board: a real photo can be hundreds of pieces,
+// and the question right now is whether one piece reads as cardboard, not how fast a full bake runs.
+function updateBakePreview(): void {
+  if (bakedPiece !== null) {
+    bakedPiece.close()
+    bakedPiece = null
+  }
+
+  if (isolatedIndex === null || !bakePreviewInput.checked) return
+
   const image = printInput.checked ? printed : plain
-  if (image === null || pieces.length === 0) return
+  if (image === null) return
 
-  // Pushing pieces apart makes the drawing wider than the image, so the fit is computed against the exploded size rather than the source.
-  const contentWidth = image.width + (columns - 1) * gap
-  const contentHeight = image.height + (rows - 1) * gap
+  const piece = pieces[isolatedIndex]
+  if (piece === undefined) return
 
-  // Fit inside the width the page gives us and the height left below the controls, and never enlarge past 1:1.
+  bakedPiece = bakePiece(piece, image)
+}
+
+// Shared by the whole puzzle view and the isolated single piece view: fits content to the viewport,
+// sets up the transform, then hands back to the caller to paint in content coordinates.
+//
+// allowUpscale lets the isolated view grow past 1:1. A single ~110px piece needs to be blown up to be
+// worth looking at, unlike the whole puzzle, which should never enlarge past its native resolution.
+function drawContent(contentWidth: number, contentHeight: number, allowUpscale: boolean, paint: () => void): void {
   // Reading clientWidth of the parent rather than of the canvas avoids a feedback loop, since a block div's width does not depend on how wide its children are.
   const widthBudget = output.clientWidth
   const heightBudget = Math.max(240, window.innerHeight - output.getBoundingClientRect().top - 40)
-  const fitScale = Math.min(widthBudget / contentWidth, heightBudget / contentHeight, 1)
+  const fitScale = allowUpscale
+    ? Math.min(widthBudget / contentWidth, heightBudget / contentHeight)
+    : Math.min(widthBudget / contentWidth, heightBudget / contentHeight, 1)
   const scale = fitScale * zoom
   viewScale = scale
 
@@ -255,19 +339,58 @@ function draw(): void {
 
   zoomValue.textContent = `${Math.round(zoom * 100)}%`
 
-  // Line widths are in image units and the transform scales them, so a plain 1 would come out as thick as one whole screen pixel per unit of zoom.
-  // Dividing by scale cancels that and gives a hairline at any zoom.
-  context.lineWidth = 1 / scale
-  context.strokeStyle = 'rgb(30 26 22 / 0.35)'
+  paint()
+}
 
-  for (const piece of pieces) drawPiece(context, piece, image)
+function draw(): void {
+  // Which of the two working images to draw. The pieces are identical either way, since the treatment changes colour and not geometry.
+  const image = printInput.checked ? printed : plain
+  if (image === null || pieces.length === 0) return
+
+  if (isolatedIndex !== null) {
+    const piece = pieces[isolatedIndex]
+    if (piece === undefined) return
+
+    // The content box is the piece's own bbox, not the whole exploded puzzle, and upscaling is allowed
+    // so a ~110px piece is actually worth looking at.
+    drawContent(piece.bbox.width, piece.bbox.height, true, () => {
+      if (bakedPiece !== null) {
+        context.drawImage(bakedPiece, 0, 0)
+        return
+      }
+
+      context.lineWidth = 1 / viewScale
+      context.strokeStyle = 'rgb(30 26 22 / 0.35)'
+      // Translating by the negative bbox corner instead of the usual gap offset lands this one piece at
+      // the content origin, since it is the only thing being drawn.
+      drawPiece(context, piece, image, -piece.bbox.x, -piece.bbox.y)
+    })
+    return
+  }
+
+  // Pushing pieces apart makes the drawing wider than the image, so the fit is computed against the exploded size rather than the source.
+  const contentWidth = image.width + (columns - 1) * gap
+  const contentHeight = image.height + (rows - 1) * gap
+
+  drawContent(contentWidth, contentHeight, false, () => {
+    // Line widths are in image units and the transform scales them, so a plain 1 would come out as thick as one whole screen pixel per unit of zoom.
+    // Dividing by scale cancels that and gives a hairline at any zoom.
+    context.lineWidth = 1 / viewScale
+    context.strokeStyle = 'rgb(30 26 22 / 0.35)'
+
+    for (const piece of pieces) drawPiece(context, piece, image, piece.col * gap, piece.row * gap)
+  })
 }
 
 // Deliberately the naive version: one clip and one draw call per piece, on the main thread, every frame.
 // Phase 3 moves this into a worker and bakes each piece once into an atlas, and Phase 5 is where the number that justifies all of that gets measured.
-function drawPiece(ctx: CanvasRenderingContext2D, piece: PieceGeometry, source: ImageBitmap): void {
+//
+// dx and dy are the only thing that differ between drawing a piece as part of the exploded whole puzzle
+// and drawing one piece alone in the isolated view: the whole puzzle offsets by the gap explosion, the
+// isolated view offsets by the negative bbox corner so the piece lands at the content origin instead.
+function drawPiece(ctx: CanvasRenderingContext2D, piece: PieceGeometry, source: ImageBitmap, dx: number, dy: number): void {
   ctx.save()
-  ctx.translate(piece.col * gap, piece.row * gap)
+  ctx.translate(dx, dy)
 
   const first = piece.path[0]!
   ctx.beginPath()
@@ -375,9 +498,11 @@ tabSizeInput.addEventListener('input', rebuild)
 tabVarianceInput.addEventListener('input', rebuild)
 
 // Geometry does not change, only where the pieces are put, so this redraws without rebuilding.
+// The hit paths do have to be rebuilt though, they bake the gap offset in.
 gapInput.addEventListener('input', () => {
   gap = Number(gapInput.value)
   gapValue.textContent = `${gap}px`
+  rebuildHitPaths()
   draw()
 })
 gapValue.textContent = `${gap}px`
@@ -423,8 +548,36 @@ for (const type of ['pointerup', 'pointercancel']) {
   })
 }
 
-// Colour only, so this swaps which bitmap is drawn and touches nothing else.
-printInput.addEventListener('change', draw)
+// Double click a piece in the whole puzzle view to isolate it.
+//
+// isPointInPath does not take content coordinates: it takes raw canvas pixel buffer coordinates, and
+// applies whatever transform the context currently has (the one the last draw() left set) to the path's
+// own stored coordinates itself. So the click position only needs to become buffer pixels, the same
+// CSS-to-buffer factor drawContent already uses, not content coordinates the way pan and zoom work.
+canvas.addEventListener('dblclick', (event) => {
+  if (isolatedIndex !== null) return
+
+  const bounds = canvas.getBoundingClientRect()
+  const dpr = window.devicePixelRatio || 1
+  const bufferX = (event.clientX - bounds.left) * dpr
+  const bufferY = (event.clientY - bounds.top) * dpr
+
+  const index = hitPaths.findIndex((path) => context.isPointInPath(path, bufferX, bufferY))
+  if (index !== -1) enterIsolation(index)
+})
+
+backToPuzzleButton.addEventListener('click', exitIsolation)
+
+// Colour only, geometry does not change, but a baked preview embeds the image pixels, so it has to be rebuilt too.
+printInput.addEventListener('change', () => {
+  updateBakePreview()
+  draw()
+})
+
+bakePreviewInput.addEventListener('change', () => {
+  updateBakePreview()
+  draw()
+})
 
 resetViewButton.addEventListener('click', resetView)
 
