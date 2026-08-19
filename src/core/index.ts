@@ -16,6 +16,14 @@ export const PUZZLE_BUILD_VERSION = 1
 export { PIECE_COUNT_BANDS, gridOptions, chooseGrid } from './lattice'
 export type { PieceCountBand, GridOption, Grid, Point } from './lattice'
 
+// Ingest. Turns whatever was uploaded into the image the bake works on, at a resolution derived from the piece size rather than from the upload.
+export { workingSize, ingestImage, TARGET_PIECE_SIZE } from './ingest'
+export type { WorkingSize } from './ingest'
+
+// Print treatment, applied to the working image before it is cut so pieces read as printed cardboard rather than as a screenshot.
+export { printTreat, applyPrintTreatment } from './print'
+export type { PrintOptions } from './print'
+
 // Producing geometry. The seam described in docs/ARCHITECTURE.md.
 export { createWarpedGridGeometry } from './geometry'
 export type { PieceGeometry, PieceGeometryProvider, GeometryOptions, Neighbors } from './geometry'

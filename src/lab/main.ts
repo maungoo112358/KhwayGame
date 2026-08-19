@@ -1,4 +1,16 @@
-import { createWarpedGridGeometry, gridOptions, makeRng, type GridOption, type PieceGeometry } from '../core'
+import {
+  chooseGrid,
+  createWarpedGridGeometry,
+  gridOptions,
+  ingestImage,
+  makeRng,
+  printTreat,
+  workingSize,
+  type Grid,
+  type GridOption,
+  type PieceGeometry,
+  type WorkingSize,
+} from '../core'
 
 // The lab is a separate Vite entry point, not a route inside the game.
 // It may import core/ and a thin slice of render/, and nothing may import it.
@@ -26,6 +38,7 @@ const tabVarianceInput = need<HTMLInputElement>('#tabVariance')
 const tabVarianceValue = need<HTMLSpanElement>('#tabVarianceValue')
 const gapInput = need<HTMLInputElement>('#gap')
 const gapValue = need<HTMLSpanElement>('#gapValue')
+const printInput = need<HTMLInputElement>('#print')
 const resetViewButton = need<HTMLButtonElement>('#resetView')
 const zoomValue = need<HTMLSpanElement>('#zoomValue')
 const readout = need<HTMLSpanElement>('#readout')
@@ -60,7 +73,14 @@ let panY = 0
 // What draw() last computed, so the pointer handlers can convert screen coordinates back into content coordinates without recomputing the fit.
 let viewScale = 1
 
-let image: ImageBitmap | null = null
+// The upload, kept only so a change of size band can re-ingest from it. Nothing draws from it.
+let source: ImageBitmap | null = null
+
+// The working image in both states, so the toggle is instant. The real pipeline only ever keeps the treated one.
+let plain: ImageBitmap | null = null
+let printed: ImageBitmap | null = null
+let workingGrid: Grid | null = null
+
 let pieces: PieceGeometry[] = []
 let columns = 0
 let rows = 0
@@ -71,7 +91,7 @@ let selectedBandId = 'medium'
 
 // A new image means new options, because the aspect ratio drives cols and rows and therefore the true piece count.
 function setImage(bitmap: ImageBitmap): void {
-  image = bitmap
+  source = bitmap
   options = gridOptions(bitmap.width, bitmap.height)
 
   // Each entry carries the count this image really produces, so nothing has to be corrected after the fact.
@@ -90,14 +110,47 @@ function setImage(bitmap: ImageBitmap): void {
   panX = 0
   panY = 0
 
-  rebuild()
+  void applyBand()
 }
 
-function rebuild(): void {
-  if (image === null) return
+// Re-ingest at the working resolution the chosen band asks for.
+//
+// Only the band moves this, so it is separate from rebuild: dragging the warp slider must not re-decode the image.
+// Everything after this point works in working coordinates, which is why the grid is measured against the downscaled image rather than the upload.
+async function applyBand(): Promise<void> {
+  if (source === null) return
 
   const chosen = options.find(({ band }) => band.id === selectedBandId)
   if (chosen === undefined) return
+
+  const size = workingSize(chosen.grid)
+
+  plain = await ingestImage(source, size)
+
+  // Timed because this is the first pass in the project that touches every pixel, and 3.6 has a five second budget for the whole bake.
+  const started = performance.now()
+  printed = printTreat(plain)
+  const printMs = performance.now() - started
+
+  workingGrid = chooseGrid(chosen.band.targetPieces, size.width, size.height)
+
+  reportIngest(chosen.grid, size, printMs)
+  rebuild()
+}
+
+function reportIngest(sourceGrid: Grid, size: WorkingSize, printMs: number): void {
+  const limited = size.limitedBySource ? ', upload too small to reach the target' : ''
+  const megapixels = (size.width * size.height) / 1e6
+
+  readout.textContent =
+    `source ${sourceGrid.imageWidth} by ${sourceGrid.imageHeight}` +
+    ` to working ${size.width} by ${size.height} (${(size.scale * 100).toFixed(0)}%)` +
+    `, pieces ${size.pieceSize.toFixed(1)}px${limited}` +
+    `, print pass ${printMs.toFixed(0)}ms for ${megapixels.toFixed(1)}MP`
+}
+
+function rebuild(): void {
+  if (workingGrid === null) return
 
   // Sliders are in whole percent and core wants fractions. The warp ceiling of 40 matches MAX_AMPLITUDE and the variance ceiling of 50 matches MAX_VARIANCE.
   const amplitude = Number(warpInput.value) / 100
@@ -110,21 +163,20 @@ function rebuild(): void {
 
   // One call. The lab does not know there is a lattice, a noise field or a bezier behind this, which is the entire point of the seam.
   pieces = createWarpedGridGeometry({
-    grid: chosen.grid,
+    grid: workingGrid,
     seed: SEED,
     warp: { amplitude },
     tabs: { size, variance },
   }).pieces()
-  columns = chosen.grid.cols
-  rows = chosen.grid.rows
-
-  // The count is on the dropdown itself, so this carries only what the dropdown cannot.
-  readout.textContent = `cells ${chosen.grid.cellWidth.toFixed(1)} by ${chosen.grid.cellHeight.toFixed(1)} image px, source ${image.width} by ${image.height}`
+  columns = workingGrid.cols
+  rows = workingGrid.rows
 
   draw()
 }
 
 function draw(): void {
+  // Which of the two working images to draw. The pieces are identical either way, since the treatment changes colour and not geometry.
+  const image = printInput.checked ? printed : plain
   if (image === null || pieces.length === 0) return
 
   // Pushing pieces apart makes the drawing wider than the image, so the fit is computed against the exploded size rather than the source.
@@ -235,10 +287,12 @@ function zoomAbout(screenX: number, screenY: number, factor: number): void {
 
 // The player supplies the image in the real game, so the lab ships no assets and draws its own stand in.
 // Deliberately busy, because a flat colour would hide a misaligned cut. The corner to corner diagonals are the giveaway: if the coordinate mapping is wrong they miss the corners.
+// Sized like a real camera upload rather than like a thumbnail, so the default view exercises the downscale path.
+// At 1600 by 1200 every band came out limitedBySource, which demonstrated the clamp and hid the normal case.
 async function placeholderImage(): Promise<ImageBitmap> {
   const source = document.createElement('canvas')
-  source.width = 1600
-  source.height = 1200
+  source.width = 4000
+  source.height = 3000
 
   const ctx = context2d(source)
 
@@ -252,13 +306,14 @@ async function placeholderImage(): Promise<ImageBitmap> {
   const rng = makeRng(20260818, 'lab-placeholder')
   for (let i = 0; i < 40; i++) {
     ctx.beginPath()
-    ctx.arc(rng.range(0, source.width), rng.range(0, source.height), rng.range(30, 140), 0, Math.PI * 2)
+    // Radii as a fraction of the width, so the picture keeps its proportions if the canvas size ever changes again.
+    ctx.arc(rng.range(0, source.width), rng.range(0, source.height), rng.range(0.019, 0.088) * source.width, 0, Math.PI * 2)
     ctx.fillStyle = `hsl(${rng.range(0, 360).toFixed(0)} 55% 60% / 0.55)`
     ctx.fill()
   }
 
   ctx.strokeStyle = 'rgb(255 255 255 / 0.8)'
-  ctx.lineWidth = 4
+  ctx.lineWidth = 10
   ctx.beginPath()
   ctx.moveTo(0, 0)
   ctx.lineTo(source.width, source.height)
@@ -277,9 +332,10 @@ fileInput.addEventListener('change', () => {
   void createImageBitmap(file).then(setImage)
 })
 
+// A different band wants a different working resolution, so this one re-ingests rather than only rebuilding.
 bandSelect.addEventListener('change', () => {
   selectedBandId = bandSelect.value
-  rebuild()
+  void applyBand()
 })
 
 warpInput.addEventListener('input', rebuild)
@@ -334,6 +390,9 @@ for (const type of ['pointerup', 'pointercancel']) {
     canvas.classList.remove('dragging')
   })
 }
+
+// Colour only, so this swaps which bitmap is drawn and touches nothing else.
+printInput.addEventListener('change', draw)
 
 resetViewButton.addEventListener('click', resetView)
 
