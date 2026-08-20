@@ -6,7 +6,7 @@
 // painterly pass, against an already ingested image, kept separate from `treat` since it is not free the
 // way print treatment is. Progress reported, results handed back transferred rather than cloned.
 
-import { assembleAtlases, createWarpedGridGeometry, ingestImage, kuwaharaTreat, printTreat } from '../core'
+import { assembleAtlases, createWarpedGridGeometry, ingestImage, kuwaharaGeneralizedTreat, kuwaharaTreat, printTreat } from '../core'
 import type { BakeRequest, BakeResponse, KuwaharaRequest, KuwaharaResponse, TreatRequest, TreatResponse } from './protocol'
 
 function reply(message: TreatResponse | BakeResponse | KuwaharaResponse, transfer: Transferable[] = []): void {
@@ -43,11 +43,11 @@ function handleBake(request: BakeRequest): void {
 }
 
 function handleKuwahara(request: KuwaharaRequest): void {
-  const { image, radius } = request
+  const { image, radius, variant } = request
 
   reply({ type: 'progress', stage: 'style', fraction: 0 })
   const started = performance.now()
-  const stylized = kuwaharaTreat(image, { radius })
+  const stylized = variant === 'classic' ? kuwaharaTreat(image, { radius }) : kuwaharaGeneralizedTreat(image, { radius })
   const styleMs = performance.now() - started
 
   reply({ type: 'progress', stage: 'print', fraction: 0.8 })

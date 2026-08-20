@@ -29,6 +29,11 @@ export type { PrintOptions } from './print'
 export { kuwaharaTreat, applyKuwahara, applyKuwaharaNaive } from './kuwahara'
 export type { KuwaharaOptions } from './kuwahara'
 
+// Generalized Kuwahara: 8 Gaussian weighted sectors blended by variance, instead of Classic's 4 square
+// regions and a hard winner. A genuinely different algorithm from kuwahara.ts, not a variant of it.
+export { kuwaharaGeneralizedTreat, applyKuwaharaGeneralized, applyKuwaharaGeneralizedNaive } from './kuwaharaGeneralized'
+export type { KuwaharaGeneralizedOptions } from './kuwaharaGeneralized'
+
 // Producing geometry. The seam described in docs/ARCHITECTURE.md.
 export { createWarpedGridGeometry } from './geometry'
 export type { PieceGeometry, PieceGeometryProvider, GeometryOptions, Neighbors } from './geometry'

@@ -39,6 +39,9 @@ export interface KuwaharaRequest {
   type: 'kuwahara'
   image: ImageBitmap
   radius: number
+  // One request type for both, rather than a fourth message type, since the request and response shapes
+  // are otherwise identical, only which core function gets called differs.
+  variant: 'classic' | 'generalized'
 }
 
 export type KuwaharaResponse =

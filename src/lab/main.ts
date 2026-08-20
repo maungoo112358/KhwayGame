@@ -28,8 +28,13 @@ function need<T extends Element>(selector: string): T {
 
 const canvas = need<HTMLCanvasElement>('#canvas')
 const output = need<HTMLDivElement>('#output')
+const sidebar = need<HTMLDivElement>('#sidebar')
+const sidebarToggleButton = need<HTMLButtonElement>('#sidebarToggle')
+const sidebarResizeHandle = need<HTMLDivElement>('#sidebarResizeHandle')
 const fileInput = need<HTMLInputElement>('#file')
+const fileNameLabel = need<HTMLSpanElement>('#fileName')
 const bandSelect = need<HTMLSelectElement>('#band')
+const bandDetail = need<HTMLSpanElement>('#bandDetail')
 const warpInput = need<HTMLInputElement>('#warp')
 const warpValue = need<HTMLSpanElement>('#warpValue')
 const tabSizeInput = need<HTMLInputElement>('#tabSize')
@@ -39,7 +44,7 @@ const tabVarianceValue = need<HTMLSpanElement>('#tabVarianceValue')
 const gapInput = need<HTMLInputElement>('#gap')
 const gapValue = need<HTMLSpanElement>('#gapValue')
 const printInput = need<HTMLInputElement>('#print')
-const kuwaharaInput = need<HTMLInputElement>('#kuwahara')
+const kuwaharaVariantSelect = need<HTMLSelectElement>('#kuwaharaVariant')
 const kuwaharaRadiusInput = need<HTMLInputElement>('#kuwaharaRadius')
 const kuwaharaRadiusValue = need<HTMLSpanElement>('#kuwaharaRadiusValue')
 const pieceControls = need<HTMLSpanElement>('#pieceControls')
@@ -89,11 +94,14 @@ let plain: ImageBitmap | null = null
 let printed: ImageBitmap | null = null
 let workingGrid: Grid | null = null
 
-// The Kuwahara pass and its own print treated version, null until the checkbox or the radius asks the
+// The Kuwahara pass and its own print treated version, null until the selector or the radius asks the
 // worker for it. Unlike plain and printed, not computed automatically on every band change, the filter
 // is not free enough to pay for on every slider tick the way print treatment is.
 let stylized: ImageBitmap | null = null
 let stylizedPrinted: ImageBitmap | null = null
+// Which variant stylized was actually computed with, so switching classic to generalized (or back)
+// refetches rather than showing a cached image that no longer matches the selector.
+let stylizedVariant: 'classic' | 'generalized' | null = null
 
 // Which piece, if any, is isolated for inspection. An index into pieces, not an id, since that is what
 // both the pieces and hitPaths arrays are keyed by.
@@ -118,23 +126,35 @@ let options: GridOption[] = []
 // Which band the player picked, kept across image changes so choosing a new photo does not silently reset the size.
 let selectedBandId = 'medium'
 
+// The <option> text stays just the band name, short enough that the select itself doesn't have to be wide.
+// The full count/grid/size detail for whichever band is currently selected is looked up from here instead.
+let bandDetails = new Map<string, string>()
+
+function updateBandDetail(): void {
+  bandDetail.textContent = bandDetails.get(bandSelect.value) ?? ''
+}
+
 // A new image means new options, because the aspect ratio drives cols and rows and therefore the true piece count.
 function setImage(bitmap: ImageBitmap): void {
   source = bitmap
   options = gridOptions(bitmap.width, bitmap.height)
 
   // Each entry carries the count and the per-piece size this image really produces, so the player is
-  // choosing between real outcomes rather than guessing and finding out after the cut.
+  // choosing between real outcomes rather than guessing and finding out after the cut. That detail goes
+  // into bandDetails rather than the option text, so the select itself only ever shows the band name.
+  bandDetails = new Map()
   bandSelect.replaceChildren(
     ...options.map(({ band, grid }) => {
       const option = document.createElement('option')
       option.value = band.id
+      option.textContent = band.name
       const pieceSize = workingSize(grid).pieceSize
-      option.textContent = `${band.name}, ${grid.pieceCount} pieces (${grid.cols} by ${grid.rows}), ~${pieceSize.toFixed(0)}px each`
+      bandDetails.set(band.id, `${grid.pieceCount} pieces (${grid.cols} by ${grid.rows}), ~${pieceSize.toFixed(0)}px per piece`)
       return option
     }),
   )
   bandSelect.value = selectedBandId
+  updateBandDetail()
 
   // A new image is a new subject, so the old zoom and pan mean nothing. Changing a slider keeps the view, since you are usually watching one spot while you drag.
   zoom = 1
@@ -148,11 +168,12 @@ function setImage(bitmap: ImageBitmap): void {
   for (const sheet of atlasSheets) sheet.close()
   atlasSheets = []
   closeAtlasButton.style.display = 'none'
-  kuwaharaInput.checked = false
+  kuwaharaVariantSelect.value = 'off'
   if (stylized !== null) stylized.close()
   if (stylizedPrinted !== null) stylizedPrinted.close()
   stylized = null
   stylizedPrinted = null
+  stylizedVariant = null
 
   void applyBand()
 }
@@ -182,13 +203,14 @@ async function applyBand(): Promise<void> {
   if (stylizedPrinted !== null) stylizedPrinted.close()
   stylized = null
   stylizedPrinted = null
+  stylizedVariant = null
 
   workingGrid = chooseGrid(chosen.band.targetPieces, size.width, size.height)
 
   reportIngest(chosen.grid, size, result.printMs)
   rebuild()
 
-  if (kuwaharaInput.checked) void applyKuwaharaStyle()
+  if (kuwaharaVariantSelect.value !== 'off') void applyKuwaharaStyle()
 }
 
 // One worker for the lab's whole lifetime. There is never more than one treat in flight, so no pool is needed yet.
@@ -233,30 +255,38 @@ function treatInWorker(source: ImageBitmap, size: WorkingSize): Promise<{ plain:
 async function applyKuwaharaStyle(): Promise<void> {
   if (plain === null) return
 
+  const variant = kuwaharaVariantSelect.value
+  if (variant !== 'classic' && variant !== 'generalized') return
+
   const radius = Number(kuwaharaRadiusInput.value)
   const clone = await createImageBitmap(plain)
 
-  kuwaharaInput.disabled = true
+  kuwaharaVariantSelect.disabled = true
   kuwaharaRadiusInput.disabled = true
   readout.textContent = 'styling...'
 
   try {
-    const result = await styleInWorker(clone, radius)
+    const result = await styleInWorker(clone, radius, variant)
 
     if (stylized !== null) stylized.close()
     if (stylizedPrinted !== null) stylizedPrinted.close()
     stylized = result.stylized
     stylizedPrinted = result.stylizedPrinted
+    stylizedVariant = variant
 
-    readout.textContent = `kuwahara radius ${radius} in ${result.styleMs.toFixed(0)}ms`
+    readout.textContent = `${variant} kuwahara radius ${radius} in ${result.styleMs.toFixed(0)}ms`
     draw()
   } finally {
-    kuwaharaInput.disabled = false
+    kuwaharaVariantSelect.disabled = false
     kuwaharaRadiusInput.disabled = false
   }
 }
 
-function styleInWorker(image: ImageBitmap, radius: number): Promise<{ stylized: ImageBitmap; stylizedPrinted: ImageBitmap; styleMs: number }> {
+function styleInWorker(
+  image: ImageBitmap,
+  radius: number,
+  variant: 'classic' | 'generalized',
+): Promise<{ stylized: ImageBitmap; stylizedPrinted: ImageBitmap; styleMs: number }> {
   return new Promise((resolve, reject) => {
     function handleMessage(event: MessageEvent<KuwaharaResponse>): void {
       const message = event.data
@@ -275,7 +305,7 @@ function styleInWorker(image: ImageBitmap, radius: number): Promise<{ stylized: 
 
     treatWorker.addEventListener('message', handleMessage)
 
-    const request: KuwaharaRequest = { type: 'kuwahara', image, radius }
+    const request: KuwaharaRequest = { type: 'kuwahara', image, radius, variant }
     treatWorker.postMessage(request, [image])
 
     if (image.width !== 0) {
@@ -288,7 +318,7 @@ function styleInWorker(image: ImageBitmap, radius: number): Promise<{ stylized: 
 // view, the single piece preview, and a full bake, so baking always uses what is actually on screen
 // rather than always the unstyled photo.
 function currentImage(): ImageBitmap | null {
-  if (kuwaharaInput.checked && stylized !== null) {
+  if (kuwaharaVariantSelect.value !== 'off' && stylized !== null) {
     return printInput.checked && stylizedPrinted !== null ? stylizedPrinted : stylized
   }
   return printInput.checked ? printed : plain
@@ -482,9 +512,10 @@ async function bakeFullPuzzle(): Promise<void> {
 // allowUpscale lets the isolated view grow past 1:1. A single ~110px piece needs to be blown up to be
 // worth looking at, unlike the whole puzzle, which should never enlarge past its native resolution.
 function drawContent(contentWidth: number, contentHeight: number, allowUpscale: boolean, paint: () => void): void {
-  // Reading clientWidth of the parent rather than of the canvas avoids a feedback loop, since a block div's width does not depend on how wide its children are.
+  // Reading clientWidth/clientHeight of the parent rather than of the canvas avoids a feedback loop. #output's box size
+  // comes from the sidebar flex layout now, not from its content, so both dimensions are safe to read directly.
   const widthBudget = output.clientWidth
-  const heightBudget = Math.max(240, window.innerHeight - output.getBoundingClientRect().top - 40)
+  const heightBudget = Math.max(240, output.clientHeight)
   const fitScale = allowUpscale
     ? Math.min(widthBudget / contentWidth, heightBudget / contentHeight)
     : Math.min(widthBudget / contentWidth, heightBudget / contentHeight, 1)
@@ -685,6 +716,9 @@ fileInput.addEventListener('change', () => {
   const file = fileInput.files?.[0]
   if (file === undefined) return
 
+  // The native file button is hidden in favor of .file-trigger, so its built-in filename readout goes with it.
+  fileNameLabel.textContent = file.name
+
   // Same call Phase 3.1 will use for ingest, hardware accelerated and able to take a File directly.
   void createImageBitmap(file).then(setImage)
 })
@@ -692,6 +726,7 @@ fileInput.addEventListener('change', () => {
 // A different band wants a different working resolution, so this one re-ingests rather than only rebuilding.
 bandSelect.addEventListener('change', () => {
   selectedBandId = bandSelect.value
+  updateBandDetail()
   void applyBand()
 })
 
@@ -788,12 +823,15 @@ kuwaharaRadiusInput.addEventListener('input', () => {
   kuwaharaRadiusValue.textContent = kuwaharaRadiusInput.value
 })
 kuwaharaRadiusInput.addEventListener('change', () => {
-  if (kuwaharaInput.checked) void applyKuwaharaStyle()
+  if (kuwaharaVariantSelect.value !== 'off') void applyKuwaharaStyle()
 })
 kuwaharaRadiusValue.textContent = kuwaharaRadiusInput.value
 
-kuwaharaInput.addEventListener('change', () => {
-  if (kuwaharaInput.checked && stylized === null) {
+// Refetches whenever the variant actually changed, classic to generalized or back, not only when
+// turning the style on from cold, a cached stylized bitmap belongs to whichever variant made it.
+kuwaharaVariantSelect.addEventListener('change', () => {
+  const variant = kuwaharaVariantSelect.value
+  if (variant !== 'off' && variant !== stylizedVariant) {
     void applyKuwaharaStyle()
   } else {
     draw()
@@ -815,6 +853,62 @@ function resetView(): void {
   draw()
 }
 
-window.addEventListener('resize', draw)
+// A ResizeObserver rather than window's resize event: it fires whenever #output's own box changes size for
+// any reason, not just the window resizing, which is what lets the coming sidebar collapse/drag-resize work
+// (and anything later that changes the layout) redraw the canvas without each one needing to call draw() itself.
+new ResizeObserver(draw).observe(output)
+
+// Remembers the width to restore on expand. Read from the CSS default rather than hardcoded, so the
+// two don't have to be kept in sync by hand.
+let expandedSidebarWidth = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sidebar-width'))
+
+sidebarToggleButton.addEventListener('click', () => {
+  const isExpanded = sidebarToggleButton.getAttribute('aria-expanded') === 'true'
+  if (isExpanded) {
+    // Capture the current width right before hiding it: a future drag-resize step can change this value,
+    // and whatever it was set to is what should come back on expand, not necessarily the original default.
+    expandedSidebarWidth = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--sidebar-width'))
+    document.documentElement.style.setProperty('--sidebar-width', '0px')
+  } else {
+    document.documentElement.style.setProperty('--sidebar-width', `${expandedSidebarWidth}px`)
+  }
+  sidebarToggleButton.setAttribute('aria-expanded', String(!isExpanded))
+  sidebarToggleButton.setAttribute('aria-label', isExpanded ? 'Expand sidebar' : 'Collapse sidebar')
+  // inert removes the whole subtree from tab order and pointer/click handling in one attribute, so a
+  // collapsed sidebar's controls can't be focused or triggered while they're not visibly there.
+  sidebar.toggleAttribute('inert', isExpanded)
+  // The resize handle hides while collapsed (CSS reads this class): dragging open from a 0-width sidebar
+  // isn't a meaningful gesture, the toggle button is what re-opens it.
+  // isExpanded here is the state *before* this click, so the sidebar ends up collapsed exactly when it was true.
+  document.body.classList.toggle('sidebar-collapsed', isExpanded)
+})
+
+const SIDEBAR_MIN_WIDTH = 220
+const SIDEBAR_MAX_WIDTH = 480
+// The resize handle sits past the toggle lane, not flush with the sidebar's own edge, so the pointer's raw
+// X position overshoots the intended width by exactly that lane's width. Read from CSS rather than hardcoded
+// so this can't quietly drift out of sync with the actual layout.
+const toggleWidth = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--toggle-width'))
+
+sidebarResizeHandle.addEventListener('pointerdown', (event) => {
+  sidebarResizeHandle.setPointerCapture(event.pointerId)
+  document.body.classList.add('resizing-sidebar')
+})
+
+sidebarResizeHandle.addEventListener('pointermove', (event) => {
+  // A captured pointer keeps sending events to this element even once the cursor moves off the 8px strip,
+  // which is what makes a fast drag not lose the handle. Events that aren't part of an active drag are
+  // filtered out here rather than relying on a separate isDragging flag.
+  if (!sidebarResizeHandle.hasPointerCapture(event.pointerId)) return
+  // The sidebar starts flush with the window's left edge, so the pointer's X position minus the toggle
+  // lane's width is the new sidebar width.
+  const width = clamp(event.clientX - toggleWidth, SIDEBAR_MIN_WIDTH, SIDEBAR_MAX_WIDTH)
+  document.documentElement.style.setProperty('--sidebar-width', `${width}px`)
+})
+
+sidebarResizeHandle.addEventListener('pointerup', (event) => {
+  sidebarResizeHandle.releasePointerCapture(event.pointerId)
+  document.body.classList.remove('resizing-sidebar')
+})
 
 void placeholderImage().then(setImage)

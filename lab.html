@@ -5,12 +5,134 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>KhwayGame Lab</title>
     <style>
+      /* Single source of truth for the sidebar's width. A drag handle and a collapse toggle will both
+         write to this instead of each keeping their own notion of how wide the sidebar currently is. */
+      :root {
+        --sidebar-width: 300px;
+        --toggle-width: 22px;
+      }
       body {
         margin: 0;
-        padding: 2rem;
+        padding: 0;
         background: #e2d9cb;
         color: #4a443c;
         font: 15px/1.6 system-ui, sans-serif;
+        height: 100vh;
+        display: flex;
+        overflow: hidden;
+        /* Containing block for the floating toggle button and the resize handle below: both are
+           positioned off the live --sidebar-width value directly, no JS repositioning needed. */
+        position: relative;
+      }
+      /* The sidebar owns its own scroll so a tall control list never eats into the canvas's height budget.
+         Padding lives on #sidebarContent, not here: this box is the one whose width animates down to 0 on
+         collapse, and it can never shrink past its own padding, only past its content's. */
+      #sidebar {
+        width: var(--sidebar-width);
+        /* Flex items get an implicit min-width: auto, which floors their shrink at the content's intrinsic
+           size (form controls have their own non-zero minimums) regardless of the width set above. Same fix
+           #output already needed. */
+        min-width: 0;
+        flex: none;
+        height: 100%;
+        overflow-y: auto;
+        overflow-x: hidden;
+        transition: width 0.18s ease;
+        /* Without this, the OS's own scrollbar renders here, and on Windows that can be a wide classic
+           scrollbar with arrow buttons, wide enough to visually collide with the toggle button and resize
+           handle floating just outside this box, both anchored to this same right edge. Pinning it to a
+           thin, styled bar keeps that edge a known width everywhere. */
+        scrollbar-width: thin;
+        scrollbar-color: rgba(74, 68, 60, 0.35) transparent;
+      }
+      #sidebar::-webkit-scrollbar {
+        width: 8px;
+      }
+      #sidebar::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      #sidebar::-webkit-scrollbar-thumb {
+        background: rgba(74, 68, 60, 0.35);
+        border-radius: 999px;
+      }
+      #sidebar::-webkit-scrollbar-thumb:hover {
+        background: rgba(74, 68, 60, 0.5);
+      }
+      /* Tracks --sidebar-width directly so dragging the resize handle wider or narrower actually changes
+         how much room the controls get, floored at 220px (the drag handle's own minimum, see below) so it
+         can never reflow narrower than that: during the collapse animation #sidebar shrinks past 220px down
+         to 0, and rather than the text squeezing to fit, the content just holds its floor width and gets cut
+         off cleanly by #sidebar's own overflow-x: hidden. */
+      #sidebarContent {
+        width: var(--sidebar-width);
+        min-width: 220px;
+        box-sizing: border-box;
+        padding: 1.75rem 1.5rem;
+      }
+      /* A dedicated full-height lane between #sidebar and #output, a normal flex sibling rather than a
+         floating shape. Its own width is fixed, so it isn't part of --sidebar-width at all: as the sidebar
+         opens, closes, or gets dragged, this strip just gets pushed along by ordinary flex flow, no calc()
+         or positioning math needed for it to always sit exactly where the sidebar currently ends. */
+      #sidebarToggle {
+        flex: none;
+        width: var(--toggle-width);
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 0;
+        border: none;
+        border-right: 1px solid rgba(74, 68, 60, 0.15);
+        background: #e2d9cb;
+        cursor: pointer;
+        transition: background-color 0.12s ease;
+      }
+      #sidebarToggle:hover {
+        background: #d7cdba;
+      }
+      #sidebarToggle:focus-visible {
+        outline: 2px solid #4a443c;
+        outline-offset: -2px;
+      }
+      #sidebarToggle .chevron {
+        width: 0;
+        height: 0;
+        border-top: 5px solid transparent;
+        border-bottom: 5px solid transparent;
+      }
+      #sidebarToggle[aria-expanded='true'] .chevron {
+        border-right: 6px solid #4a443c;
+      }
+      #sidebarToggle[aria-expanded='false'] .chevron {
+        border-left: 6px solid #4a443c;
+        /* Nudge the left-pointing triangle back onto the visual center, its own point would otherwise
+           sit slightly left of where the right-pointing one did. */
+        margin-left: 1px;
+      }
+      /* The drag handle is a thin invisible-until-hovered strip, starting exactly where the toggle lane's
+         own width ends rather than centered on that boundary, so its 8px hit area never overlaps the
+         toggle's, each control keeps a fully separate clickable zone. Hidden while collapsed: dragging
+         from a 0-width sidebar isn't a meaningful gesture, that's what the toggle button is for. */
+      #sidebarResizeHandle {
+        position: absolute;
+        top: 0;
+        left: calc(var(--sidebar-width) + var(--toggle-width));
+        width: 8px;
+        height: 100%;
+        cursor: col-resize;
+        z-index: 4;
+        touch-action: none;
+      }
+      #sidebarResizeHandle:hover,
+      body.resizing-sidebar #sidebarResizeHandle {
+        background: rgba(74, 68, 60, 0.15);
+      }
+      body.sidebar-collapsed #sidebarResizeHandle {
+        display: none;
+      }
+      /* Dragging shouldn't let the mouse selecting sidebar text turn into a text-selection drag instead. */
+      body.resizing-sidebar {
+        user-select: none;
       }
       h1 {
         margin: 0 0 0.25rem;
@@ -21,20 +143,92 @@
         margin: 0 0 1.5rem;
         opacity: 0.7;
       }
-      #controls,
-      #output {
-        margin-bottom: 1.5rem;
-      }
       #controls {
         display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        gap: 1.25rem;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 1rem;
       }
-      #controls label {
-        display: inline-flex;
+      #controls label,
+      #controls .field {
+        display: flex;
         align-items: center;
         gap: 0.4rem;
+      }
+      /* Buttons, selects, and the file trigger read as one family of soft controls instead of each browser's raw default chrome. */
+      #controls button,
+      #controls select,
+      .file-trigger {
+        font: inherit;
+        font-size: 0.9rem;
+        padding: 0.45rem 0.8rem;
+        border: 1px solid rgba(74, 68, 60, 0.25);
+        border-radius: 8px;
+        background: #eee7db;
+        color: #4a443c;
+        cursor: pointer;
+        transition: background-color 0.12s ease, border-color 0.12s ease;
+      }
+      #controls button:hover,
+      #controls select:hover,
+      .file-trigger:hover {
+        background: #e6dcc9;
+        border-color: rgba(74, 68, 60, 0.4);
+      }
+      #controls button:active,
+      .file-trigger:active {
+        background: #ddd0b8;
+      }
+      #controls button:focus-visible,
+      #controls select:focus-visible,
+      .file-trigger:focus-visible {
+        outline: 2px solid #4a443c;
+        outline-offset: 1px;
+      }
+      #controls button:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      /* Native select arrows differ per browser, so the arrow is drawn by hand and the native one turned off. */
+      #controls select {
+        max-width: 100%;
+        appearance: none;
+        -webkit-appearance: none;
+        padding-right: 1.6rem;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%234a443c' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+        background-repeat: no-repeat;
+        background-position: right 0.6rem center;
+        background-size: 0.6rem;
+      }
+      /* Standard visually-hidden pattern: the real file input stays focusable and keyboard operable, the
+         label styled as .file-trigger is what's actually seen and is wired to it through the for/id pair. */
+      .visually-hidden {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
+      #fileName {
+        opacity: 0.7;
+        font-size: 0.85rem;
+      }
+      /* Margin, not padding: #output's own box (measured via clientWidth/clientHeight in main.ts) has to stay
+         exactly the usable canvas area, and margin sits outside that box while padding would count as part of it. */
+      /* No explicit height: default align-items:stretch already shrinks the cross axis to fit
+         within the margin, the same way flex:1 1 auto does for width. Setting height:100% here
+         would size the box before the margin is subtracted, pushing it 1.75rem past the viewport
+         edge and clipping the canvas against body's overflow:hidden. */
+      #output {
+        flex: 1 1 auto;
+        min-width: 0;
+        box-sizing: border-box;
+        margin: 1.75rem;
+        overflow: hidden;
       }
       #band {
         font: inherit;
@@ -58,12 +252,67 @@
         opacity: 0.7;
         font-variant-numeric: tabular-nums;
       }
+      /* Range inputs have no shared standard yet, Chromium/WebKit and Firefox each need their own thumb/track
+         pseudo-elements, so both are set here to the same look. */
       #controls input[type='range'] {
         width: 7rem;
+        appearance: none;
+        -webkit-appearance: none;
+        height: 4px;
+        border-radius: 999px;
+        background: rgba(74, 68, 60, 0.2);
+        outline: none;
+      }
+      #controls input[type='range']::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        background: #4a443c;
+        cursor: pointer;
+        border: 2px solid #e2d9cb;
+        box-shadow: 0 0 0 1px rgba(74, 68, 60, 0.3);
+      }
+      #controls input[type='range']::-moz-range-track {
+        height: 4px;
+        border-radius: 999px;
+        background: rgba(74, 68, 60, 0.2);
+      }
+      #controls input[type='range']::-moz-range-thumb {
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        background: #4a443c;
+        cursor: pointer;
+        border: 2px solid #e2d9cb;
+      }
+      #controls input[type='range']:focus-visible::-webkit-slider-thumb,
+      #controls input[type='range']:focus-visible::-moz-range-thumb {
+        outline: 2px solid #4a443c;
+        outline-offset: 2px;
+      }
+      /* accent-color recolors the native checkbox to match the palette without building a custom one from scratch. */
+      #controls input[type='checkbox'] {
+        accent-color: #4a443c;
+        width: 1rem;
+        height: 1rem;
       }
       #readout {
         opacity: 0.7;
         font-variant-numeric: tabular-nums;
+      }
+      /* Holds the Size row plus its detail line stacked underneath, distinct from #controls label's own
+         row layout so the select stays short instead of having to fit "Medium, 588 pieces..." inline. */
+      .field-group {
+        display: flex;
+        flex-direction: column;
+        gap: 0.3rem;
+      }
+      #bandDetail {
+        opacity: 0.7;
+        font-size: 0.82rem;
+        font-variant-numeric: tabular-nums;
+        padding-left: 0.1rem;
       }
       canvas {
         display: block;
@@ -76,29 +325,51 @@
     </style>
   </head>
   <body>
-    <h1>Puzzle cut lab</h1>
-    <p>Standalone dev harness. Imports core only, never the game UI. Double-click a piece to inspect it.</p>
+    <div id="sidebar">
+     <div id="sidebarContent">
+      <h1>Puzzle cut lab</h1>
+      <p>Standalone dev harness. Imports core only, never the game UI. Double-click a piece to inspect it.</p>
 
-    <div id="controls">
-      <label>Image <input id="file" type="file" accept="image/*" /></label>
-      <label>Size <select id="band"></select></label>
-      <label>Warp <input id="warp" type="range" min="0" max="40" step="1" value="12" /><span id="warpValue"></span></label>
-      <label>Tabs <input id="tabSize" type="range" min="0" max="150" step="5" value="100" /><span id="tabSizeValue"></span></label>
-      <label>Variance <input id="tabVariance" type="range" min="0" max="50" step="5" value="15" /><span id="tabVarianceValue"></span></label>
-      <label>Gap <input id="gap" type="range" min="0" max="20" step="1" value="5" /><span id="gapValue"></span></label>
-      <label><input id="print" type="checkbox" checked /> Print treatment</label>
-      <label><input id="kuwahara" type="checkbox" /> Kuwahara filter</label>
-      <label>Radius <input id="kuwaharaRadius" type="range" min="1" max="12" step="1" value="4" /><span id="kuwaharaRadiusValue"></span></label>
-      <span id="pieceControls" style="display: none">
-        <label><input id="bakePreview" type="checkbox" /> Bake preview</label>
-        <button id="backToPuzzle" type="button">Back to puzzle</button>
-      </span>
-      <button id="resetView" type="button">Reset view</button>
-      <button id="bakeFull" type="button">Bake full puzzle</button>
-      <button id="closeAtlas" type="button" style="display: none">Close atlas view</button>
-      <span id="zoomValue"></span>
-      <span id="readout"></span>
+      <div id="controls">
+        <div class="field">
+          Image
+          <label for="file" class="file-trigger">Choose File</label>
+          <span id="fileName">No file chosen</span>
+          <input id="file" type="file" accept="image/*" class="visually-hidden" />
+        </div>
+        <div class="field-group">
+          <label>Size <select id="band"></select></label>
+          <span id="bandDetail" class="detail-line"></span>
+        </div>
+        <label>Warp <input id="warp" type="range" min="0" max="40" step="1" value="12" /><span id="warpValue"></span></label>
+        <label>Tabs <input id="tabSize" type="range" min="0" max="150" step="5" value="100" /><span id="tabSizeValue"></span></label>
+        <label>Variance <input id="tabVariance" type="range" min="0" max="50" step="5" value="15" /><span id="tabVarianceValue"></span></label>
+        <label>Gap <input id="gap" type="range" min="0" max="20" step="1" value="5" /><span id="gapValue"></span></label>
+        <label><input id="print" type="checkbox" checked /> Print treatment</label>
+        <label>Style
+          <select id="kuwaharaVariant">
+            <option value="off">Off</option>
+            <option value="classic">Kuwahara: Classic</option>
+            <option value="generalized">Kuwahara: Generalized</option>
+          </select>
+        </label>
+        <label>Radius <input id="kuwaharaRadius" type="range" min="1" max="12" step="1" value="4" /><span id="kuwaharaRadiusValue"></span></label>
+        <span id="pieceControls" style="display: none">
+          <label><input id="bakePreview" type="checkbox" /> Bake preview</label>
+          <button id="backToPuzzle" type="button">Back to puzzle</button>
+        </span>
+        <button id="resetView" type="button">Reset view</button>
+        <button id="bakeFull" type="button">Bake full puzzle</button>
+        <button id="closeAtlas" type="button" style="display: none">Close atlas view</button>
+        <span id="zoomValue"></span>
+        <span id="readout"></span>
+      </div>
+     </div>
     </div>
+    <button id="sidebarToggle" type="button" aria-expanded="true" aria-label="Collapse sidebar">
+      <span class="chevron" aria-hidden="true"></span>
+    </button>
+    <div id="sidebarResizeHandle"></div>
     <div id="output"><canvas id="canvas"></canvas></div>
 
     <script type="module" src="/src/lab/main.ts"></script>
