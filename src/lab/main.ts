@@ -10,7 +10,7 @@ import {
   type PieceGeometry,
   type WorkingSize,
 } from '../core'
-import type { BakeRequest, BakeResponse, TreatRequest, TreatResponse } from '../worker/protocol'
+import type { BakeRequest, BakeResponse, KuwaharaRequest, KuwaharaResponse, TreatRequest, TreatResponse } from '../worker/protocol'
 
 // The lab is a separate Vite entry point, not a route inside the game.
 // It may import core/ and a thin slice of render/, and nothing may import it.
@@ -39,6 +39,9 @@ const tabVarianceValue = need<HTMLSpanElement>('#tabVarianceValue')
 const gapInput = need<HTMLInputElement>('#gap')
 const gapValue = need<HTMLSpanElement>('#gapValue')
 const printInput = need<HTMLInputElement>('#print')
+const kuwaharaInput = need<HTMLInputElement>('#kuwahara')
+const kuwaharaRadiusInput = need<HTMLInputElement>('#kuwaharaRadius')
+const kuwaharaRadiusValue = need<HTMLSpanElement>('#kuwaharaRadiusValue')
 const pieceControls = need<HTMLSpanElement>('#pieceControls')
 const bakePreviewInput = need<HTMLInputElement>('#bakePreview')
 const backToPuzzleButton = need<HTMLButtonElement>('#backToPuzzle')
@@ -86,6 +89,12 @@ let plain: ImageBitmap | null = null
 let printed: ImageBitmap | null = null
 let workingGrid: Grid | null = null
 
+// The Kuwahara pass and its own print treated version, null until the checkbox or the radius asks the
+// worker for it. Unlike plain and printed, not computed automatically on every band change, the filter
+// is not free enough to pay for on every slider tick the way print treatment is.
+let stylized: ImageBitmap | null = null
+let stylizedPrinted: ImageBitmap | null = null
+
 // Which piece, if any, is isolated for inspection. An index into pieces, not an id, since that is what
 // both the pieces and hitPaths arrays are keyed by.
 let isolatedIndex: number | null = null
@@ -114,12 +123,14 @@ function setImage(bitmap: ImageBitmap): void {
   source = bitmap
   options = gridOptions(bitmap.width, bitmap.height)
 
-  // Each entry carries the count this image really produces, so nothing has to be corrected after the fact.
+  // Each entry carries the count and the per-piece size this image really produces, so the player is
+  // choosing between real outcomes rather than guessing and finding out after the cut.
   bandSelect.replaceChildren(
     ...options.map(({ band, grid }) => {
       const option = document.createElement('option')
       option.value = band.id
-      option.textContent = `${band.name}, ${grid.pieceCount} pieces (${grid.cols} by ${grid.rows})`
+      const pieceSize = workingSize(grid).pieceSize
+      option.textContent = `${band.name}, ${grid.pieceCount} pieces (${grid.cols} by ${grid.rows}), ~${pieceSize.toFixed(0)}px each`
       return option
     }),
   )
@@ -130,13 +141,18 @@ function setImage(bitmap: ImageBitmap): void {
   panX = 0
   panY = 0
 
-  // Whatever was isolated, or baked, belonged to the old image's geometry, and no longer means anything.
+  // Whatever was isolated, baked, or styled belonged to the old image, and no longer means anything.
   isolatedIndex = null
   pieceControls.style.display = 'none'
   bakePreviewInput.checked = false
   for (const sheet of atlasSheets) sheet.close()
   atlasSheets = []
   closeAtlasButton.style.display = 'none'
+  kuwaharaInput.checked = false
+  if (stylized !== null) stylized.close()
+  if (stylizedPrinted !== null) stylizedPrinted.close()
+  stylized = null
+  stylizedPrinted = null
 
   void applyBand()
 }
@@ -161,10 +177,18 @@ async function applyBand(): Promise<void> {
   plain = result.plain
   printed = result.printed
 
+  // plain just changed underneath it, so any cached style belongs to the old image now.
+  if (stylized !== null) stylized.close()
+  if (stylizedPrinted !== null) stylizedPrinted.close()
+  stylized = null
+  stylizedPrinted = null
+
   workingGrid = chooseGrid(chosen.band.targetPieces, size.width, size.height)
 
   reportIngest(chosen.grid, size, result.printMs)
   rebuild()
+
+  if (kuwaharaInput.checked) void applyKuwaharaStyle()
 }
 
 // One worker for the lab's whole lifetime. There is never more than one treat in flight, so no pool is needed yet.
@@ -197,6 +221,77 @@ function treatInWorker(source: ImageBitmap, size: WorkingSize): Promise<{ plain:
       throw new Error('treat worker transfer did not neuter the source bitmap, zero copy gate failed')
     }
   })
+}
+
+// Runs against the already ingested plain image, a clone of it, kept alive the same way applyBand keeps
+// source alive: plain is still needed for the flat view even after this transfers a copy away.
+// Guarded against overlapping calls: styleInWorker's message listener has no request id, it resolves on
+// the next message full stop, so two requests in flight at once means the second listener can resolve
+// off the first request's response, close bitmaps the first call is still using mid draw. Toggling the
+// checkbox and then the radius before the first request lands would trigger exactly that. Disabling both
+// controls for the duration is the same guard bakeFullPuzzle already uses for the same reason.
+async function applyKuwaharaStyle(): Promise<void> {
+  if (plain === null) return
+
+  const radius = Number(kuwaharaRadiusInput.value)
+  const clone = await createImageBitmap(plain)
+
+  kuwaharaInput.disabled = true
+  kuwaharaRadiusInput.disabled = true
+  readout.textContent = 'styling...'
+
+  try {
+    const result = await styleInWorker(clone, radius)
+
+    if (stylized !== null) stylized.close()
+    if (stylizedPrinted !== null) stylizedPrinted.close()
+    stylized = result.stylized
+    stylizedPrinted = result.stylizedPrinted
+
+    readout.textContent = `kuwahara radius ${radius} in ${result.styleMs.toFixed(0)}ms`
+    draw()
+  } finally {
+    kuwaharaInput.disabled = false
+    kuwaharaRadiusInput.disabled = false
+  }
+}
+
+function styleInWorker(image: ImageBitmap, radius: number): Promise<{ stylized: ImageBitmap; stylizedPrinted: ImageBitmap; styleMs: number }> {
+  return new Promise((resolve, reject) => {
+    function handleMessage(event: MessageEvent<KuwaharaResponse>): void {
+      const message = event.data
+      if (message.type === 'progress') {
+        readout.textContent = `${message.stage}...`
+        return
+      }
+
+      treatWorker.removeEventListener('message', handleMessage)
+      if (message.type === 'error') {
+        reject(new Error(message.message))
+      } else {
+        resolve(message)
+      }
+    }
+
+    treatWorker.addEventListener('message', handleMessage)
+
+    const request: KuwaharaRequest = { type: 'kuwahara', image, radius }
+    treatWorker.postMessage(request, [image])
+
+    if (image.width !== 0) {
+      throw new Error('kuwahara worker transfer did not neuter the source bitmap, zero copy gate failed')
+    }
+  })
+}
+
+// Whichever combination of the two independent style toggles is active. The same image drives the main
+// view, the single piece preview, and a full bake, so baking always uses what is actually on screen
+// rather than always the unstyled photo.
+function currentImage(): ImageBitmap | null {
+  if (kuwaharaInput.checked && stylized !== null) {
+    return printInput.checked && stylizedPrinted !== null ? stylizedPrinted : stylized
+  }
+  return printInput.checked ? printed : plain
 }
 
 function reportIngest(sourceGrid: Grid, size: WorkingSize, printMs: number): void {
@@ -292,7 +387,7 @@ function updateBakePreview(): void {
 
   if (isolatedIndex === null || !bakePreviewInput.checked) return
 
-  const image = printInput.checked ? printed : plain
+  const image = currentImage()
   if (image === null) return
 
   const piece = pieces[isolatedIndex]
@@ -319,7 +414,7 @@ function closeAtlasView(): void {
 async function bakeFullPuzzle(): Promise<void> {
   if (workingGrid === null) return
 
-  const image = printInput.checked ? printed : plain
+  const image = currentImage()
   if (image === null) return
 
   if (isolatedIndex !== null) exitIsolation()
@@ -450,8 +545,8 @@ function draw(): void {
     return
   }
 
-  // Which of the two working images to draw. The pieces are identical either way, since the treatment changes colour and not geometry.
-  const image = printInput.checked ? printed : plain
+  // Which combination of style toggles to draw. The pieces are identical either way, since neither treatment changes geometry.
+  const image = currentImage()
   if (image === null || pieces.length === 0) return
 
   if (isolatedIndex !== null) {
@@ -684,6 +779,25 @@ printInput.addEventListener('change', () => {
 bakePreviewInput.addEventListener('change', () => {
   updateBakePreview()
   draw()
+})
+
+// Live label while dragging, but the filter itself only reruns on release (change), not on input: it is
+// real per-frame work, not a redraw, and radius 1 through 12 dragged live would mean firing a worker
+// request on every tick.
+kuwaharaRadiusInput.addEventListener('input', () => {
+  kuwaharaRadiusValue.textContent = kuwaharaRadiusInput.value
+})
+kuwaharaRadiusInput.addEventListener('change', () => {
+  if (kuwaharaInput.checked) void applyKuwaharaStyle()
+})
+kuwaharaRadiusValue.textContent = kuwaharaRadiusInput.value
+
+kuwaharaInput.addEventListener('change', () => {
+  if (kuwaharaInput.checked && stylized === null) {
+    void applyKuwaharaStyle()
+  } else {
+    draw()
+  }
 })
 
 resetViewButton.addEventListener('click', resetView)

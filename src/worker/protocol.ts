@@ -30,3 +30,18 @@ export type BakeResponse =
   | { type: 'progress'; stage: 'baking'; completed: number; total: number }
   | { type: 'result'; atlases: ImageBitmap[]; pieces: AssembledPiece[]; bakeMs: number }
   | { type: 'error'; message: string }
+
+// Separate from `treat`: this runs against an already ingested image, not a raw upload, so it never
+// redoes the decode. Deliberately not folded into the automatic treat pipeline either, since radius is a
+// slider and print treatment is not, recomputing on every band change the way print treatment safely
+// does would mean paying the (optimised, but not free) filter cost even when the toggle is off.
+export interface KuwaharaRequest {
+  type: 'kuwahara'
+  image: ImageBitmap
+  radius: number
+}
+
+export type KuwaharaResponse =
+  | { type: 'progress'; stage: 'style' | 'print'; fraction: number }
+  | { type: 'result'; stylized: ImageBitmap; stylizedPrinted: ImageBitmap; styleMs: number }
+  | { type: 'error'; message: string }

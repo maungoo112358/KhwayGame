@@ -1,14 +1,15 @@
 // Runs entirely inside a Worker. Compiled by src/worker/tsconfig.json, which swaps the DOM lib for WebWorker,
 // same as core/tsconfig.json, so document and window do not exist here either.
 //
-// Two request types. `treat`: ingest and print treatment, the pipe proved out at 3.3. `bake`: geometry
-// plus the full bake and atlas assembly from 3.4 through 3.6, chained in one run. Progress reported,
-// results handed back transferred rather than cloned.
+// Three request types. `treat`: ingest and print treatment, the pipe proved out at 3.3. `bake`: geometry
+// plus the full bake and atlas assembly from 3.4 through 3.6, chained in one run. `kuwahara`: the optional
+// painterly pass, against an already ingested image, kept separate from `treat` since it is not free the
+// way print treatment is. Progress reported, results handed back transferred rather than cloned.
 
-import { assembleAtlases, createWarpedGridGeometry, ingestImage, printTreat } from '../core'
-import type { BakeRequest, BakeResponse, TreatRequest, TreatResponse } from './protocol'
+import { assembleAtlases, createWarpedGridGeometry, ingestImage, kuwaharaTreat, printTreat } from '../core'
+import type { BakeRequest, BakeResponse, KuwaharaRequest, KuwaharaResponse, TreatRequest, TreatResponse } from './protocol'
 
-function reply(message: TreatResponse | BakeResponse, transfer: Transferable[] = []): void {
+function reply(message: TreatResponse | BakeResponse | KuwaharaResponse, transfer: Transferable[] = []): void {
   self.postMessage(message, transfer)
 }
 
@@ -41,12 +42,28 @@ function handleBake(request: BakeRequest): void {
   reply({ type: 'result', atlases, pieces: assembled, bakeMs }, atlases)
 }
 
-self.onmessage = async (event: MessageEvent<TreatRequest | BakeRequest>) => {
+function handleKuwahara(request: KuwaharaRequest): void {
+  const { image, radius } = request
+
+  reply({ type: 'progress', stage: 'style', fraction: 0 })
+  const started = performance.now()
+  const stylized = kuwaharaTreat(image, { radius })
+  const styleMs = performance.now() - started
+
+  reply({ type: 'progress', stage: 'print', fraction: 0.8 })
+  const stylizedPrinted = printTreat(stylized)
+
+  reply({ type: 'result', stylized, stylizedPrinted, styleMs }, [stylized, stylizedPrinted])
+}
+
+self.onmessage = async (event: MessageEvent<TreatRequest | BakeRequest | KuwaharaRequest>) => {
   try {
     if (event.data.type === 'treat') {
       await handleTreat(event.data)
-    } else {
+    } else if (event.data.type === 'bake') {
       handleBake(event.data)
+    } else {
+      handleKuwahara(event.data)
     }
   } catch (err) {
     reply({ type: 'error', message: err instanceof Error ? err.message : String(err) })

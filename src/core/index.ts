@@ -24,6 +24,11 @@ export type { WorkingSize } from './ingest'
 export { printTreat, applyPrintTreatment } from './print'
 export type { PrintOptions } from './print'
 
+// Kuwahara filter, an optional painterly style pass independent of print treatment. applyKuwaharaNaive
+// is exported for its own sake, the naive-to-summed-area-table story lives in docs/JOURNAL.md.
+export { kuwaharaTreat, applyKuwahara, applyKuwaharaNaive } from './kuwahara'
+export type { KuwaharaOptions } from './kuwahara'
+
 // Producing geometry. The seam described in docs/ARCHITECTURE.md.
 export { createWarpedGridGeometry } from './geometry'
 export type { PieceGeometry, PieceGeometryProvider, GeometryOptions, Neighbors } from './geometry'
