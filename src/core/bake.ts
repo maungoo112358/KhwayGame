@@ -58,8 +58,7 @@ export function bakePiece(piece: PieceGeometry, image: ImageBitmap, options: Car
   const crushWidth = options.crushWidth ?? DEFAULT_CRUSH_WIDTH
   const crushAlpha = options.crushAlpha ?? DEFAULT_CRUSH_ALPHA
 
-  // Only down and right need extra room: the rim is offset that way, and the top face and crush stroke
-  // both sit exactly on the piece's own bbox.
+  // Only down and right need extra room: the rim is offset that way, and the top face and crush stroke both sit exactly on the piece's own bbox.
   const box = piece.bbox
   const canvas = new OffscreenCanvas(Math.ceil(box.width + rimOffset), Math.ceil(box.height + rimOffset))
   const ctx = canvas.getContext('2d')

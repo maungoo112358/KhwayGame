@@ -16,8 +16,7 @@ export interface Point {
 export interface Grid {
   cols: number
   rows: number
-  // The real number of pieces, which is rarely the number that was asked for. See chooseGrid.
-  pieceCount: number
+  pieceCount: number // The real number of pieces, which is rarely the number that was asked for. See chooseGrid.
   imageWidth: number
   imageHeight: number
   cellWidth: number
@@ -29,12 +28,10 @@ export interface Lattice {
   rows: number
   // Vertices per row, which is cols + 1. This is the stride for indexing into points, and using cols here by mistake produces a sheared puzzle rather than a crash.
   stride: number
-  // Flat, row major, length (cols + 1) * (rows + 1). Index with vertexAt rather than by hand.
-  points: Point[]
+  points: Point[]// Flat, row major, length (cols + 1) * (rows + 1). Index with vertexAt rather than by hand.
 }
 
 // Pick cols and rows for a requested piece count, favouring square cells.
-//
 // Writing a for the image aspect ratio W/H, square cells mean W/cols = H/rows, so cols = a * rows.
 // Combined with cols * rows = N that gives rows = sqrt(N/a) and cols = sqrt(N*a).
 // Portrait images need no special case: a below 1 simply yields more rows than columns.

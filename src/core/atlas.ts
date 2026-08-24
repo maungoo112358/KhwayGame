@@ -118,8 +118,7 @@ function packSheet(rects: PaddedRect[], sheetSize: number): { placements: SheetP
   const remaining: PaddedRect[] = []
 
   for (const rect of rects) {
-    // Best area fit: among every free rectangle the piece fits inside, pick the one that wastes the
-    // least leftover area, rather than just the first one found.
+    // Best area fit: among every free rectangle the piece fits inside, pick the one that wastes the least leftover area, rather than just the first one found.
     let bestIndex = -1
     let bestLeftover = Infinity
 

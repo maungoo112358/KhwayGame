@@ -49,7 +49,6 @@ export interface Rng {
 }
 
 // Create a generator for one named stream of one master seed.
-//
 // Always create these inside the build that uses them, never at module level.
 // A generator held in module scope would carry state between builds and quietly destroy determinism.
 export function makeRng(masterSeed: number, stream: string): Rng {
