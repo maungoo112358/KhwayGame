@@ -11,11 +11,16 @@
 // briefly before compositing, roughly 100MB at 1000 pieces; worth revisiting under Phase 5 profiling if
 // that ever turns out to matter, not before.
 
-import type { PieceGeometry } from './geometry'
+import { isEdgePiece, type Neighbors, type PieceGeometry } from './geometry'
 import type { Bounds } from './pieces'
-import type { Point } from './lattice'
-import { bakePiece, type CardboardOptions } from './bake'
+import type { Grid, Point } from './lattice'
+import { bakePiece, pieceAlphaMask, pieceDominantColor, type CardboardOptions, type AlphaMask } from './bake'
 import { packAtlas, type AtlasOptions } from './atlas'
+import { mix32 } from './rng'
+
+// Bumped whenever the shape of PuzzleBuild changes, so old saves can be rejected instead of silently misinterpreted.
+// See docs/ARCHITECTURE.md.
+export const PUZZLE_BUILD_VERSION = 1
 
 export interface AssembleOptions {
   cardboard?: CardboardOptions
@@ -35,19 +40,44 @@ export interface AssembledPiece {
   frame: Bounds
   // Grid origin relative to the frame: piece.solved minus the bbox corner bakePiece drew from.
   anchor: Point
+  row: number
+  col: number
+  solved: Point
+  neighbors: Neighbors
+  isEdge: boolean
+  dominantColor: number
+  alphaMask: AlphaMask
 }
 
-export interface AssembledAtlases {
+export interface PuzzleBuild {
   atlases: ImageBitmap[]
   pieces: AssembledPiece[]
+  version: number
+  signature: string
+  seed: number
+  grid: {cols: number; rows: number}
+  working: {w: number; h: number}
 }
 
-export function assembleAtlases(pieces: PieceGeometry[], image: ImageBitmap, options: AssembleOptions = {}): AssembledAtlases {
-  const baked: { piece: PieceGeometry; bitmap: ImageBitmap }[] = []
+export function assembleAtlases(pieces: PieceGeometry[], image: ImageBitmap, grid: Grid, seed: number, options: AssembleOptions = {}): PuzzleBuild {
+
+  const baked: { piece: PieceGeometry; bitmap: ImageBitmap; dominantColor: number; isEdge: boolean; alphaMask: AlphaMask; }[] = []
+
+  const canvas = new OffscreenCanvas(image.width, image.height);
+
+  const ctx = canvas.getContext('2d')
+  if(ctx === null)  throw new Error('this environment has no 2d canvas context')
+  ctx.save();
+  ctx.drawImage(image, 0,0);
+  ctx.restore();
+  const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+
   for (let i = 0; i < pieces.length; i++) {
     const piece = pieces[i]!
-    baked.push({ piece, bitmap: bakePiece(piece, image, options.cardboard) })
-
+    const dominantColor = pieceDominantColor(piece,image);
+    const isEdge = isEdgePiece(piece.neighbors);
+    const alphaMask = pieceAlphaMask(piece);
+    baked.push({ piece, bitmap: bakePiece(piece, image, options.cardboard), dominantColor, isEdge, alphaMask })
     const completed = i + 1
     if (options.onProgress && (completed % PROGRESS_INTERVAL === 0 || completed === pieces.length)) {
       options.onProgress(completed, pieces.length)
@@ -85,6 +115,13 @@ export function assembleAtlases(pieces: PieceGeometry[], image: ImageBitmap, opt
       atlas: placement.atlas,
       frame: { x: placement.x, y: placement.y, width, height },
       anchor: { x: entry.piece.solved.x - entry.piece.bbox.x, y: entry.piece.solved.y - entry.piece.bbox.y },
+      row: entry.piece.row,
+      col: entry.piece.col,
+      solved: entry.piece.solved,
+      neighbors: entry.piece.neighbors,
+      isEdge: entry.isEdge,
+      dominantColor: entry.dominantColor,
+      alphaMask: entry.alphaMask
     })
   }
 
@@ -95,5 +132,21 @@ export function assembleAtlases(pieces: PieceGeometry[], image: ImageBitmap, opt
   return {
     atlases: sheets.map((sheet) => sheet.transferToImageBitmap()),
     pieces: outPieces,
+    version: PUZZLE_BUILD_VERSION,
+    signature: hashImage(pixels, seed, grid).toString(16),
+    seed: seed,
+    grid: {cols: grid.cols, rows: grid.rows},
+    working:{w:grid.imageWidth,h:grid.imageHeight}
   }
+}
+
+
+export function hashImage(pixels: Uint8ClampedArray,seed: number,grid: Grid): number {
+  let h = mix32(seed);
+  for (let i = 0; i < pixels.length; i++) {
+    h = mix32(h ^ pixels[i]!);
+  }
+   h = mix32(h ^ grid.cols)
+   h = mix32(h ^ grid.rows);
+  return h;
 }

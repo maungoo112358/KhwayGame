@@ -10,6 +10,7 @@ import { assembleAtlases, createWarpedGridGeometry, ingestImage, kuwaharaGeneral
 import type { BakeRequest, BakeResponse, KuwaharaRequest, KuwaharaResponse, TreatRequest, TreatResponse } from './protocol'
 
 function reply(message: TreatResponse | BakeResponse | KuwaharaResponse, transfer: Transferable[] = []): void {
+  //Do not remove "transfer". Without it, every reply is a full copy, not a zero-copy handoff.
   self.postMessage(message, transfer)
 }
 
@@ -34,7 +35,7 @@ function handleBake(request: BakeRequest): void {
   const pieces = createWarpedGridGeometry({ grid, seed, warp, tabs }).pieces()
 
   const started = performance.now()
-  const { atlases, pieces: assembled } = assembleAtlases(pieces, image, {
+  const { atlases, pieces: assembled } = assembleAtlases(pieces, image, grid, seed, {
     onProgress: (completed, total) => reply({ type: 'progress', stage: 'baking', completed, total }),
   })
   const bakeMs = performance.now() - started

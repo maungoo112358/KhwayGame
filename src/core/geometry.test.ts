@@ -3,7 +3,7 @@ import { chooseGrid, buildLattice, type Grid } from './lattice'
 import { warpLattice } from './warp'
 import { buildEdges } from './edges'
 import { cellPaths } from './pieces'
-import { createWarpedGridGeometry } from './geometry'
+import { createWarpedGridGeometry, isEdgePiece } from './geometry'
 
 const SEED = 20260818
 
@@ -125,5 +125,26 @@ describe('createWarpedGridGeometry', () => {
     }
 
     expect(flat[0]!.path[0]).toEqual({ x: 0, y: 0 })
+  })
+})
+
+describe('isEdgePiece', () => {
+  it('is false when every neighbour exists', () => {
+    expect(isEdgePiece([1, 2, 3, 4])).toBe(false)
+  })
+
+  it('is true when exactly one neighbour is missing, whichever side', () => {
+    expect(isEdgePiece([null, 2, 3, 4])).toBe(true)
+    expect(isEdgePiece([1, null, 3, 4])).toBe(true)
+    expect(isEdgePiece([1, 2, null, 4])).toBe(true)
+    expect(isEdgePiece([1, 2, 3, null])).toBe(true)
+  })
+
+  it('is true for a corner, two missing neighbours', () => {
+    expect(isEdgePiece([null, 2, 3, null])).toBe(true)
+  })
+
+  it('is true for the smallest possible puzzle, every neighbour missing', () => {
+    expect(isEdgePiece([null, null, null, null])).toBe(true)
   })
 })

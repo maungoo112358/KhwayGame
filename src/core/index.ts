@@ -5,9 +5,7 @@
 //
 // Nothing in here may import pixi.js, state/, render/, ui/ or lab/.
 
-// Bumped whenever the shape of PuzzleBuild changes, so old saves can be rejected instead of silently misinterpreted.
-// See docs/ARCHITECTURE.md.
-export const PUZZLE_BUILD_VERSION = 1
+export { PUZZLE_BUILD_VERSION, assembleAtlases } from './assemble'
 
 // This file is core's entire public surface. Nothing outside core/ may import any other file in here, and the core-public-surface-only rule in .dependency-cruiser.cjs fails the build if it tries.
 // The point is that lattices, noise, warps and beziers are implementation. Swapping the warped grid for Voronoi later must not be visible from outside, and it cannot be if nobody outside can name those modules. See D2.
@@ -48,8 +46,7 @@ export type { AtlasRect, AtlasPlacement, AtlasResult, AtlasOptions } from './atl
 
 // The whole puzzle's worth of baking and packing, chained: bake every piece, pack them, composite the
 // real atlas sheets.
-export { assembleAtlases } from './assemble'
-export type { AssembleOptions, AssembledPiece, AssembledAtlases } from './assemble'
+export type { AssembleOptions, AssembledPiece, PuzzleBuild } from './assemble'
 
 // Seeded randomness. Published on purpose rather than leaked: determinism is a project wide requirement, not a geometry one, and a consumer that needs a repeatable sequence should use this rather than roll its own.
 // Swapping the warped grid for Voronoi would not touch this, which is the test for whether something belongs on this surface.

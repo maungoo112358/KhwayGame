@@ -17,82 +17,165 @@
 // same settings showed nothing at all. No single width or reach served both. See D21 in
 // docs/DECISIONS.md for the full account and the condition for revisiting it.
 
-import type { PieceGeometry } from './geometry'
-import type { Point } from './lattice'
+import type { PieceGeometry } from "./geometry";
+import type { Point } from "./lattice";
 
 export interface CardboardOptions {
   // Raw board colour on the side facing the light.
-  rimColorLight?: string
+  rimColorLight?: string;
   // Raw board colour on the side facing away from the light.
-  rimColorDark?: string
+  rimColorDark?: string;
   // How far down and right the rim is offset from the top face. This offset is what reads as thickness.
-  rimOffset?: number
+  rimOffset?: number;
   // Width of the die cut crush stroke, traced along the same path the clip used.
-  crushWidth?: number
+  crushWidth?: number;
   // Alpha of the crush stroke. Present on every edge, regardless of which way it faces.
-  crushAlpha?: number
+  crushAlpha?: number;
 }
 
-const DEFAULT_RIM_COLOR_LIGHT = '#E8D9BE'
-const DEFAULT_RIM_COLOR_DARK = '#7C6448'
-const DEFAULT_RIM_OFFSET = 6
-const DEFAULT_CRUSH_WIDTH = 2
-const DEFAULT_CRUSH_ALPHA = 0.5
+export interface AlphaMask {
+  bits: Uint8Array;
+  w: number;
+  h: number;
+}
+
+const DEFAULT_RIM_COLOR_LIGHT = "#E8D9BE";
+const DEFAULT_RIM_COLOR_DARK = "#7C6448";
+const DEFAULT_RIM_OFFSET = 6;
+const DEFAULT_CRUSH_WIDTH = 2;
+const DEFAULT_CRUSH_ALPHA = 0.5;
+const ALPHA_MASK_SCALE = 0.5;
 
 function outlinePath(points: Point[]): Path2D {
-  const path = new Path2D()
-  const first = points[0]!
-  path.moveTo(first.x, first.y)
+  const path = new Path2D();
+  const first = points[0]!;
+  path.moveTo(first.x, first.y);
   for (let i = 1; i < points.length; i++) {
-    const point = points[i]!
-    path.lineTo(point.x, point.y)
+    const point = points[i]!;
+    path.lineTo(point.x, point.y);
   }
-  path.closePath()
-  return path
+  path.closePath();
+  return path;
 }
 
-export function bakePiece(piece: PieceGeometry, image: ImageBitmap, options: CardboardOptions = {}): ImageBitmap {
-  const rimColorLight = options.rimColorLight ?? DEFAULT_RIM_COLOR_LIGHT
-  const rimColorDark = options.rimColorDark ?? DEFAULT_RIM_COLOR_DARK
-  const rimOffset = options.rimOffset ?? DEFAULT_RIM_OFFSET
-  const crushWidth = options.crushWidth ?? DEFAULT_CRUSH_WIDTH
-  const crushAlpha = options.crushAlpha ?? DEFAULT_CRUSH_ALPHA
+export function bakePiece(piece: PieceGeometry, image: ImageBitmap, options: CardboardOptions = {}, ): ImageBitmap {
+  const rimColorLight = options.rimColorLight ?? DEFAULT_RIM_COLOR_LIGHT;
+  const rimColorDark = options.rimColorDark ?? DEFAULT_RIM_COLOR_DARK;
+  const rimOffset = options.rimOffset ?? DEFAULT_RIM_OFFSET;
+  const crushWidth = options.crushWidth ?? DEFAULT_CRUSH_WIDTH;
+  const crushAlpha = options.crushAlpha ?? DEFAULT_CRUSH_ALPHA;
 
   // Only down and right need extra room: the rim is offset that way, and the top face and crush stroke both sit exactly on the piece's own bbox.
-  const box = piece.bbox
-  const canvas = new OffscreenCanvas(Math.ceil(box.width + rimOffset), Math.ceil(box.height + rimOffset))
-  const ctx = canvas.getContext('2d')
-  if (ctx === null) throw new Error('this environment has no 2d canvas context')
-
+  const box = piece.bbox;
+  const canvas = new OffscreenCanvas( Math.ceil(box.width + rimOffset), Math.ceil(box.height + rimOffset));
+  const ctx = canvas.getContext("2d");
+  if (ctx === null) throw new Error("this environment has no 2d canvas context");
+    
   // piece.path is in image space. Shifting the origin to the box corner is what lands it inside this
   // small canvas instead of off in the middle of the source photo.
-  ctx.translate(-box.x, -box.y)
-  const outline = outlinePath(piece.path)
+  ctx.translate(-box.x, -box.y);
+  const outline = outlinePath(piece.path);
 
   // Layer 1: the rim. Filled first so the face drawn next covers most of it, offset down and right so a
   // sliver keeps showing on exactly those two sides, never the top or left. The gradient runs corner to
   // corner of the piece's own box, so it is lighter on the side facing the light regardless of shape.
-  const rimGradient = ctx.createLinearGradient(box.x, box.y, box.x + box.width, box.y + box.height)
-  rimGradient.addColorStop(0, rimColorLight)
-  rimGradient.addColorStop(1, rimColorDark)
+  const rimGradient = ctx.createLinearGradient( box.x, box.y, box.x + box.width, box.y + box.height, );
+  rimGradient.addColorStop(0, rimColorLight);
+  rimGradient.addColorStop(1, rimColorDark);
 
-  ctx.save()
-  ctx.translate(rimOffset, rimOffset)
-  ctx.fillStyle = rimGradient
-  ctx.fill(outline)
-  ctx.restore()
+  ctx.save();
+  ctx.translate(rimOffset, rimOffset);
+  ctx.fillStyle = rimGradient;
+  ctx.fill(outline);
+  ctx.restore();
 
   // Layer 2: the top face. Same clip-then-drawImage the lab's naive drawPiece already does, just with
   // the treated image rather than raw pixels.
-  ctx.save()
-  ctx.clip(outline)
-  ctx.drawImage(image, box.x, box.y, box.width, box.height, box.x, box.y, box.width, box.height)
-  ctx.restore()
+  ctx.save();
+  ctx.clip(outline);
+  ctx.drawImage(image,box.x,box.y,box.width,box.height,box.x,box.y,box.width,box.height,);
+  ctx.restore();
 
   // Layer 3: the die cut crush, traced along the same outline the clip used, present all the way round.
-  ctx.lineWidth = crushWidth
-  ctx.strokeStyle = `rgb(0 0 0 / ${crushAlpha})`
-  ctx.stroke(outline)
+  ctx.lineWidth = crushWidth;
+  ctx.strokeStyle = `rgb(0 0 0 / ${crushAlpha})`;
+  ctx.stroke(outline);
 
-  return canvas.transferToImageBitmap()
+  return canvas.transferToImageBitmap();
+}
+
+export function pieceDominantColor(piece: PieceGeometry,  image: ImageBitmap): number {
+  const box = piece.bbox;
+  const canvas = new OffscreenCanvas( Math.ceil(box.width), Math.ceil(box.height),  );
+
+  const ctx = canvas.getContext('2d');
+  if (ctx === null) throw new Error('this environment has no 2d canvas context');
+
+  ctx.translate(-box.x, -box.y);
+  const outline = outlinePath(piece.path);
+
+  ctx.save();
+  ctx.clip(outline);
+  ctx.drawImage(image,box.x,box.y,box.width,box.height,box.x,box.y,box.width,box.height,);
+  ctx.restore();
+
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const pixels = imageData.data;
+  let red: number = 0;
+  let green: number = 0;
+  let blue: number = 0;
+  let count: number = 0;
+
+  for (let i = 0; i < pixels.length; i += 4) {
+    const r = pixels[i]!;
+    const g = pixels[i + 1]!;
+    const b = pixels[i + 2]!;
+    const a = pixels[i + 3]!;
+
+    if (a == 0) continue;
+    red += r;
+    green += g;
+    blue += b;
+    count++;
+  }
+  red = red / count;
+  green = green / count;
+  blue = blue / count;
+
+  return (Math.round(red) << 16) | (Math.round(green) << 8) | Math.round(blue);
+}
+
+export function pieceAlphaMask(piece: PieceGeometry): AlphaMask {
+  const box = piece.bbox;
+  const maskWidth = Math.ceil(box.width * ALPHA_MASK_SCALE);
+  const maskHeight = Math.ceil(box.height * ALPHA_MASK_SCALE);
+  const canvas = new OffscreenCanvas(maskWidth, maskHeight);
+  const ctx = canvas.getContext("2d");
+  if (ctx === null)throw new Error("this environment has no 2d canvas context");
+
+  ctx.scale(ALPHA_MASK_SCALE, ALPHA_MASK_SCALE);
+  ctx.translate(-box.x, -box.y);
+
+  const outline = outlinePath(piece.path);
+
+  ctx.save();
+  ctx.fill(outline);
+  ctx.restore();
+
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const pixels = imageData.data;
+  const bits: Uint8Array = new Uint8Array(Math.ceil((maskWidth * maskHeight) / 8));
+
+  for(let i = 0; i<pixels.length; i+=4){
+    const a = pixels[i + 3]!;
+
+    if(a === 0) continue;
+  
+   const pixelIndex = i/4;
+   let byteIndex :number = pixelIndex >> 3
+   let bitIndex : number = pixelIndex & 7;
+   bits[byteIndex]! |= (1 << bitIndex)
+  }
+  return {bits, w : maskWidth, h : maskHeight};
+
 }

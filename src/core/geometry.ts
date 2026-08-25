@@ -83,3 +83,7 @@ function neighborsOf(col: number, row: number, cols: number, rows: number): Neig
     col > 0 ? id - 1 : null,
   ]
 }
+
+export function isEdgePiece(neighbors:Neighbors):boolean{
+ return neighbors.some(n=>n===null);
+}
