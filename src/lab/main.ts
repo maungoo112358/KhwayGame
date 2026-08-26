@@ -1,15 +1,4 @@
-import {
-  bakePiece,
-  chooseGrid,
-  createWarpedGridGeometry,
-  gridOptions,
-  makeRng,
-  workingSize,
-  type Grid,
-  type GridOption,
-  type PieceGeometry,
-  type WorkingSize,
-} from '../core'
+import { bakePiece, chooseGrid, createWarpedGridGeometry, gridOptions, makeRng, workingSize, type Grid, type GridOption, type PieceGeometry, type WorkingSize, } from '../core'
 import type { BakeRequest, BakeResponse, KuwaharaRequest, KuwaharaResponse, TreatRequest, TreatResponse } from '../worker/protocol'
 
 // The lab is a separate Vite entry point, not a route inside the game.
@@ -282,11 +271,7 @@ async function applyKuwaharaStyle(): Promise<void> {
   }
 }
 
-function styleInWorker(
-  image: ImageBitmap,
-  radius: number,
-  variant: 'classic' | 'generalized',
-): Promise<{ stylized: ImageBitmap; stylizedPrinted: ImageBitmap; styleMs: number }> {
+function styleInWorker(image: ImageBitmap, radius: number, variant: 'classic' | 'generalized'): Promise<{stylized: ImageBitmap; stylizedPrinted: ImageBitmap; styleMs: number}> {
   return new Promise((resolve, reject) => {
     function handleMessage(event: MessageEvent<KuwaharaResponse>): void {
       const message = event.data

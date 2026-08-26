@@ -28,7 +28,7 @@ export interface BakeRequest {
 // postMessage calls competing with the baking itself for the thread.
 export type BakeResponse =
   | { type: 'progress'; stage: 'baking'; completed: number; total: number }
-  | { type: 'result'; atlases: ImageBitmap[]; pieces: AssembledPiece[]; bakeMs: number }
+  | { type: 'result'; atlases: ImageBitmap[]; pieces: AssembledPiece[]; bakeMs: number; working: {w:number; h:number} }
   | { type: 'error'; message: string }
 
 // Separate from `treat`: this runs against an already ingested image, not a raw upload, so it never
