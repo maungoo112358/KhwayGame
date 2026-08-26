@@ -1,10 +1,6 @@
 // Architecture rules, enforced by the build rather than by review.
-// The closest equivalent you may have used is ArchUnit in Java: declare which package may depend on which, and fail the build when someone crosses the line.
-//
 // This file is .cjs rather than .js because package.json sets "type": "module" and dependency-cruiser loads its config as CommonJS.
-//
 // dependency-cruiser itself lives in tools/arch with its own pinned TypeScript 6, because it cannot parse TypeScript 7 yet and reports a false pass when it fails to parse. See D16.
-//
 // Run with: npm run lint:arch
 
 module.exports = {
@@ -15,7 +11,7 @@ module.exports = {
       comment:
         'core/ turns an image into a PuzzleBuild and knows nothing else. The UI is expected to be rewritten repeatedly, and core must survive every rewrite untouched. See D8.',
       from: { path: '^src/core' },
-      to: { path: '^src/(state|render|ui|lab)' },
+      to: { path: '^src/(state|render|ui|lab|stress)' },
     },
     {
       name: 'core-no-pixi',
@@ -39,14 +35,14 @@ module.exports = {
       comment:
         'Dependencies flow toward core. state/ may import core/, but never render/, ui/ or lab/.',
       from: { path: '^src/state' },
-      to: { path: '^src/(render|ui|lab)' },
+      to: { path: '^src/(render|ui|lab|stress)' },
     },
     {
       name: 'core-public-surface-only',
       severity: 'error',
       comment:
         'src/core/index.ts is the whole of core\'s public surface. Lattices, noise, warps and beziers are implementation detail, and replacing the warped grid with Voronoi later must not be visible from outside core. It cannot be if nobody outside can name those modules. See D2 and the PieceGeometryProvider seam in docs/ARCHITECTURE.md.',
-      from: { path: '^src/(state|render|ui|lab|worker)' },
+      from: { path: '^src/(state|render|ui|lab|worker|stress)' },
       to: { path: '^src/core/', pathNot: '^src/core/index[.]ts$' },
     },
     {
@@ -65,6 +61,14 @@ module.exports = {
       from: {},
       to: { circular: true },
     },
+    {
+      name: 'nothing-imports-stress',
+      severity: 'error',
+      comment:
+        'The stress view is a throwaway performance harness and a separate Vite entry point. Nothing may depend on it, the same way nothing may depend on the lab.',
+      from: { pathNot: '^src/stress' },
+      to: { path: '^src/stress' },
+    }
   ],
 
   options: {
