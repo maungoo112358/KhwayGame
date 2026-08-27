@@ -1,5 +1,5 @@
-import { ImageSource, Rectangle, Sprite, Texture } from "pixi.js";
-import { chooseGrid, makeRng, workingSize, type Grid, type WorkingSize } from "../core"
+import { Container, ImageSource, Rectangle, Sprite, Texture } from "pixi.js";
+import { chooseGrid, makeRng, workingSize, type AssembledPiece, type Grid, type WorkingSize } from "../core"
 import { createApp } from "../render/app";
 import type { BakeRequest, BakeResponse, TreatRequest, TreatResponse } from "../worker/protocol";
 
@@ -16,6 +16,9 @@ const readout = need<HTMLDivElement>('#readout');
 const TARGET_PIECES = 1000;
 const SEED = 20260818;
 
+const MIN_ZOOM = 1
+const MAX_ZOOM = 40
+const ZOOM_STEP = 1.15
 
 // A function rather than an inline null check, because narrowing a module level const does not follow into function bodies.
 function context2d(target: HTMLCanvasElement): CanvasRenderingContext2D {
@@ -63,6 +66,10 @@ async function placeholderImage(): Promise<ImageBitmap> {
   return createImageBitmap(source)
 }
 
+function clamp(value: number, low: number, high: number): number {
+  return Math.min(Math.max(value, low), high)
+}
+
 async function runStress(): Promise<void>{
   const raw = await placeholderImage();
 
@@ -78,19 +85,46 @@ async function runStress(): Promise<void>{
 
   const sources = bake.atlases.map((atlas)=> new ImageSource({resource: atlas}));
 
-  const sheetTexture = new Texture({source: sources[0]!});
-  const sheetSprite = new Sprite(sheetTexture);
-  app.stage.addChild(sheetSprite);
+  const board = new Container();
+  let zoom = MIN_ZOOM;
+  const fitScale = Math.min(canvasHost.clientWidth/bake.working.w,canvasHost.clientHeight/bake.working.h);
+  board.scale.set(fitScale);
+  
+  app.canvas.addEventListener('wheel', (event)=>{
+    event.preventDefault();
+    const bounds = app.canvas.getBoundingClientRect();
 
-  const piece = bake.pieces[0]!;
-  const frame = new Rectangle(piece.frame.x,piece.frame.y,piece.frame.width,piece.frame.height);
-  const texture = new Texture({source:sources[piece.atlas]!, frame});
+    const cursorX = event.clientX - bounds.left;
+    const cursorY = event.clientY - bounds.top;
+    const contentX = (cursorX - board.position.x) / board.scale.x;
+    const contentY = (cursorY - board.position.y) / board.scale.y;
+
+    const factor = event.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
+    const target = clamp(zoom * factor, MIN_ZOOM, MAX_ZOOM);
+    const newScale = fitScale * target;
+
+    board.position.set(cursorX - contentX * newScale, cursorY - contentY *newScale);
+    board.scale.set(newScale);
+    zoom = target;
+  },
+  {passive:false},
+);
+
+  app.stage.addChild(board);
+  bake.pieces.forEach((piece)=>{
+    const sprite = buildPieceSprite(piece,sources)
+    board.addChild(sprite);
+  });
+}
+
+function buildPieceSprite(piece: AssembledPiece, sources: ImageSource[]): Sprite{
+   
+  const frame = new Rectangle(piece.frame.x, piece.frame.y, piece.frame.width,piece.frame.height);
+  const texture = new Texture({source: sources[piece.atlas]!, frame});
 
   const pieceSprite = new Sprite(texture);
-  pieceSprite.position.set(200,200);
-  app.stage.addChild(pieceSprite);
-  
-  app.stage.removeChild(sheetSprite);
+  pieceSprite.position.set(piece.solved.x-piece.anchor.x, piece.solved.y-piece.anchor.y);
+  return pieceSprite;
 }
 
 const stressWorker = new Worker(new URL('../worker/treat-worker.ts', import.meta.url), { type: 'module' });
