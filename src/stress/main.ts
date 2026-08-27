@@ -87,28 +87,60 @@ async function runStress(): Promise<void>{
 
   const board = new Container();
   let zoom = MIN_ZOOM;
+  const canvas = app.canvas;
   const fitScale = Math.min(canvasHost.clientWidth/bake.working.w,canvasHost.clientHeight/bake.working.h);
   board.scale.set(fitScale);
   
-  app.canvas.addEventListener('wheel', (event)=>{
-    event.preventDefault();
-    const bounds = app.canvas.getBoundingClientRect();
+    canvas.addEventListener('wheel', (event)=>{
+      event.preventDefault();
+      const bounds = app.canvas.getBoundingClientRect();
 
-    const cursorX = event.clientX - bounds.left;
-    const cursorY = event.clientY - bounds.top;
-    const contentX = (cursorX - board.position.x) / board.scale.x;
-    const contentY = (cursorY - board.position.y) / board.scale.y;
+      const cursorX = event.clientX - bounds.left;
+      const cursorY = event.clientY - bounds.top;
+      const contentX = (cursorX - board.position.x) / board.scale.x;
+      const contentY = (cursorY - board.position.y) / board.scale.y;
 
-    const factor = event.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
-    const target = clamp(zoom * factor, MIN_ZOOM, MAX_ZOOM);
-    const newScale = fitScale * target;
+      const factor = event.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
+      const target = clamp(zoom * factor, MIN_ZOOM, MAX_ZOOM);
+      const newScale = fitScale * target;
 
-    board.position.set(cursorX - contentX * newScale, cursorY - contentY *newScale);
-    board.scale.set(newScale);
-    zoom = target;
-  },
-  {passive:false},
-);
+      board.position.set(cursorX - contentX * newScale, cursorY - contentY *newScale);
+      board.scale.set(newScale);
+      zoom = target;
+    },
+    {passive:false},
+  );
+
+  let dragging: { pointerId: number; x: number; y: number } | null = null
+
+  canvas.addEventListener('pointerdown', (event) => {
+  dragging = { pointerId: event.pointerId, x: event.clientX, y: event.clientY }
+
+  canvas.setPointerCapture(event.pointerId)
+  canvas.classList.add('dragging')
+  });
+
+  canvas.addEventListener('pointermove', (event) => {
+  if (dragging === null || event.pointerId !== dragging.pointerId) return
+
+  board.position.x += event.clientX - dragging.x;
+  board.position.y += event.clientY - dragging.y;
+  const visibleWidth = Math.min(bake.working.w, canvasHost.clientWidth / board.scale.x)
+  const leftEdgeX = clamp(-board.position.x / board.scale.x, 0, Math.max(0, bake.working.w - visibleWidth))
+  board.position.x = -leftEdgeX * board.scale.x
+
+  const visibleHeight = Math.min(bake.working.h, canvasHost.clientHeight / board.scale.y)
+  const topEdgeY = clamp(-board.position.y / board.scale.y, 0, Math.max(0, bake.working.h - visibleHeight))
+  board.position.y = -topEdgeY * board.scale.y
+  dragging = { pointerId: event.pointerId, x: event.clientX, y: event.clientY }  
+  });
+
+  for (const type of ['pointerup', 'pointercancel']) {
+    canvas.addEventListener(type, () => {
+      dragging = null
+      canvas.classList.remove('dragging')
+    })
+  }
 
   app.stage.addChild(board);
   bake.pieces.forEach((piece)=>{
