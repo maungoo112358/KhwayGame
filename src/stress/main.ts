@@ -1,4 +1,18 @@
-import { makeRng } from "../core"
+import { chooseGrid, makeRng, workingSize, type Grid, type WorkingSize } from "../core"
+import type { BakeRequest, BakeResponse, TreatRequest, TreatResponse } from "../worker/protocol";
+
+function need<T extends Element>(selector: string): T {
+  const element = document.querySelector<T>(selector)
+  if (element === null) throw new Error(`stress.html is missing ${selector}`)
+  return element
+}
+
+const canvasHost = need<HTMLDivElement>('#canvas');
+const readout = need<HTMLDivElement>('#readout');
+
+const TARGET_PIECES = 1000;
+const SEED = 20260818;
+
 
 // A function rather than an inline null check, because narrowing a module level const does not follow into function bodies.
 function context2d(target: HTMLCanvasElement): CanvasRenderingContext2D {
@@ -45,3 +59,72 @@ async function placeholderImage(): Promise<ImageBitmap> {
 
   return createImageBitmap(source)
 }
+
+async function runStress(): Promise<void>{
+  const raw = await placeholderImage();
+  let grid = chooseGrid(TARGET_PIECES,raw.width, raw.height);
+  const size = workingSize(grid);
+  const image = (await requestTreat(raw, size)).printed;
+  grid = chooseGrid(TARGET_PIECES,image.width, image.height);
+  const bake = await requestBake(image,grid);
+  readout.textContent = `${bake.pieces.length} pieces, ${bake.atlases.length} sheet(s), baked in ${bake.bakeMs.toFixed(0)}ms`
+}
+
+const stressWorker = new Worker(new URL('../worker/treat-worker.ts', import.meta.url), { type: 'module' });
+
+function requestTreat(source: ImageBitmap, size: WorkingSize): Promise<{plain: ImageBitmap; printed: ImageBitmap; printMs: number}>{
+  return new Promise((resolve, reject)=>{
+    function handleMessage(event: MessageEvent<TreatResponse>): void{
+      const message = event.data;
+      if(message.type === 'progress'){
+        readout.textContent = `${message.stage}...`;
+        return;
+      }
+      
+      stressWorker.removeEventListener('message', handleMessage);
+      if(message.type === 'error'){
+        reject(new Error(message.message));
+      }else{
+        resolve(message);
+      }
+    }
+      stressWorker.addEventListener('message', handleMessage);
+
+      const request: TreatRequest = {type: 'treat', source, size};
+      stressWorker.postMessage(request, [source]);
+
+      if(source.width !== 0){
+        throw new Error('stress worker transfer did not neuter the source bitmap, zero copy gate failed');
+      }
+      })
+}
+
+function requestBake(image: ImageBitmap, grid: Grid): Promise<BakeResponse &{type: 'result'}>{
+  
+     return new Promise<BakeResponse & {type: `result`}>((resolve, reject)=>{
+       function handleMessage(event: MessageEvent<BakeResponse>): void{
+        const message = event.data;
+        if(message.type === 'progress'){
+          readout.textContent = `baking ${message.completed} of ${message.total} pieces...`;
+          return;
+        }
+
+        stressWorker.removeEventListener('message', handleMessage);
+        if(message.type === 'error'){
+          reject(new Error(message.message));
+        }else{
+          resolve(message);
+        }
+       }
+
+       stressWorker.addEventListener('message', handleMessage);
+       const request: BakeRequest = {type: 'bake', image, grid, seed:SEED};
+       stressWorker.postMessage(request, [image]);
+
+       if(image.width !==0){
+        throw new Error('stress worker transfer did not neuter the source bitmap, zero copy gate failed');
+       }
+    })
+}
+
+void runStress();
