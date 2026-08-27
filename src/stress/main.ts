@@ -1,5 +1,8 @@
+import { ImageSource, Rectangle, Sprite, Texture } from "pixi.js";
 import { chooseGrid, makeRng, workingSize, type Grid, type WorkingSize } from "../core"
+import { createApp } from "../render/app";
 import type { BakeRequest, BakeResponse, TreatRequest, TreatResponse } from "../worker/protocol";
+
 
 function need<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector)
@@ -62,12 +65,32 @@ async function placeholderImage(): Promise<ImageBitmap> {
 
 async function runStress(): Promise<void>{
   const raw = await placeholderImage();
-  let grid = chooseGrid(TARGET_PIECES,raw.width, raw.height);
+
+  let grid = chooseGrid(TARGET_PIECES, raw.width, raw.height);
   const size = workingSize(grid);
   const image = (await requestTreat(raw, size)).printed;
   grid = chooseGrid(TARGET_PIECES,image.width, image.height);
   const bake = await requestBake(image,grid);
-  readout.textContent = `${bake.pieces.length} pieces, ${bake.atlases.length} sheet(s), baked in ${bake.bakeMs.toFixed(0)}ms`
+
+  readout.textContent = `${bake.pieces.length} pieces, ${bake.atlases.length} sheet(s), baked in ${bake.bakeMs.toFixed(0)}ms`;
+
+  const {app} = await createApp(canvasHost);
+
+  const sources = bake.atlases.map((atlas)=> new ImageSource({resource: atlas}));
+
+  const sheetTexture = new Texture({source: sources[0]!});
+  const sheetSprite = new Sprite(sheetTexture);
+  app.stage.addChild(sheetSprite);
+
+  const piece = bake.pieces[0]!;
+  const frame = new Rectangle(piece.frame.x,piece.frame.y,piece.frame.width,piece.frame.height);
+  const texture = new Texture({source:sources[piece.atlas]!, frame});
+
+  const pieceSprite = new Sprite(texture);
+  pieceSprite.position.set(200,200);
+  app.stage.addChild(pieceSprite);
+  
+  app.stage.removeChild(sheetSprite);
 }
 
 const stressWorker = new Worker(new URL('../worker/treat-worker.ts', import.meta.url), { type: 'module' });
