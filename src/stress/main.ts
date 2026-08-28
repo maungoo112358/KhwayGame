@@ -2,6 +2,7 @@ import { Container, ImageSource, Rectangle, Sprite, Texture } from "pixi.js";
 import { chooseGrid, makeRng, workingSize, type AssembledPiece, type Grid, type WorkingSize } from "../core"
 import { createApp } from "../render/app";
 import type { BakeRequest, BakeResponse, TreatRequest, TreatResponse } from "../worker/protocol";
+import { createFrameRecorder, onKeyPress, scriptedPan } from "./harness";
 
 
 function need<T extends Element>(selector: string): T {
@@ -12,6 +13,7 @@ function need<T extends Element>(selector: string): T {
 
 const canvasHost = need<HTMLDivElement>('#canvas');
 const readout = need<HTMLDivElement>('#readout');
+const harness = need<HTMLDivElement>("#harness");
 
 const TARGET_PIECES = 1000;
 const SEED = 20260818;
@@ -86,6 +88,16 @@ async function runStress(): Promise<void>{
   const sources = bake.atlases.map((atlas)=> new ImageSource({resource: atlas}));
 
   const board = new Container();
+
+  const recorder = createFrameRecorder(app.ticker);
+
+  onKeyPress('p', async()=>{
+    recorder.start();
+    await scriptedPan(app.ticker,board, 11, 11, 1500);
+    recorder.stop();
+    const frames = recorder.samples();
+  });
+
   let zoom = MIN_ZOOM;
   const canvas = app.canvas;
   const fitScale = Math.min(canvasHost.clientWidth/bake.working.w,canvasHost.clientHeight/bake.working.h);
