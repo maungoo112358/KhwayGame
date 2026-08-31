@@ -1,11 +1,12 @@
 import { Container, ImageSource, Rectangle, Sprite, Texture } from "pixi.js";
-import { chooseGrid, makeRng, workingSize, type Grid, type WorkingSize } from "../core"
+import { chooseGrid, makeRng, workingSize, type Grid, type TabOptions, type WarpOptions, type WorkingSize } from "../core"
 import { createApp } from "../render/app";
 import type { BakeRequest, BakeResponse, TreatRequest, TreatResponse } from "../worker/protocol";
 import {
   applyCommand, buildSpatialHash, createClusterIndex, createCommandContext, createPuzzleState,
-  pickAt, pickAtNaive, scatterPieces,
-  type ClusterIndex, type CommandContext, type PuzzleState, type SpatialHash,
+  deletePuzzle, getLatestSave, imageBitmapToPngBlob, pickAt, pickAtNaive, restorePuzzleState,
+  savePuzzle, scatterPieces, serializePuzzleState,
+  type ClusterIndex, type CommandContext, type PuzzleState, type SavedPuzzle, type SpatialHash,
 } from "../state";
 import { clearMeasurements, createFrameRecorder, measurementsFor, onKeyPress, passesFrameBudget, percentiles, readMemory, renderPanel, scriptedClusterMove, scriptedPan, scriptedProbe } from "./harness";
 
@@ -82,16 +83,73 @@ function clamp(value: number, low: number, high: number): number {
   return Math.min(Math.max(value, low), high)
 }
 
-async function runStress(): Promise<void>{
+interface LivePuzzle {
+  bake: BakeResult
+  state: PuzzleState
+  workingImageBlob: Blob
+}
+
+// The full fresh path: placeholder, treat, bake, scatter. The working image blob is extracted before
+// requestBake transfers and neuters the bitmap, see the gotcha in docs/status.md, since it needs to
+// survive baking to be saved later.
+async function freshPuzzle(): Promise<LivePuzzle> {
   const raw = await placeholderImage();
 
   let grid = chooseGrid(TARGET_PIECES, raw.width, raw.height);
   const size = workingSize(grid);
   const image = (await requestTreat(raw, size)).printed;
-  grid = chooseGrid(TARGET_PIECES,image.width, image.height);
-  const bake = await requestBake(image,grid);
+  grid = chooseGrid(TARGET_PIECES, image.width, image.height);
 
-  readout.textContent = `${bake.pieces.length} pieces, ${bake.atlases.length} sheet(s), baked in ${bake.bakeMs.toFixed(0)}ms, signature ${bake.signature}`;
+  const workingImageBlob = await imageBitmapToPngBlob(image);
+  const bake = await requestBake(image, grid);
+
+  const state = createPuzzleState(bake);
+  // Seeded, so a reload scatters the same way twice, same reasoning as the placeholder image itself.
+  scatterPieces(state, bake.working, makeRng(SEED, 'scatter'));
+
+  return { bake, state, workingImageBlob }
+}
+
+// PuzzleBuild.grid only carries cols and rows, requestBake needs the full Grid chooseGrid produces:
+// pieceCount, imageWidth/imageHeight and cellWidth/cellHeight. All four are exact arithmetic on cols,
+// rows and the working image's own dimensions (see core/lattice.ts's chooseGrid), not another guess, so
+// reconstructing them here is not a second, possibly different chooseGrid call, it is the same numbers.
+function reconstructGrid(colsRows: { cols: number; rows: number }, working: { w: number; h: number }): Grid {
+  return {
+    cols: colsRows.cols,
+    rows: colsRows.rows,
+    pieceCount: colsRows.cols * colsRows.rows,
+    imageWidth: working.w,
+    imageHeight: working.h,
+    cellWidth: working.w / colsRows.cols,
+    cellHeight: working.h / colsRows.rows,
+  }
+}
+
+// Re-bakes from the saved working image rather than trusting saved geometry directly: PuzzleBuild is
+// never stored, per D11, the only way back to real pieces is baking again from what produced them the
+// first time. Returns null rather than throwing on a signature mismatch, a corrupt or stale save should
+// fall back to a fresh puzzle, not crash the page.
+async function tryResume(existing: SavedPuzzle): Promise<LivePuzzle | null> {
+  const image = await createImageBitmap(existing.workingImage)
+  const grid = reconstructGrid(existing.grid, { w: image.width, h: image.height })
+  const bake = await requestBake(image, grid, existing.seed, existing.cutOptions.warp, existing.cutOptions.tabs)
+
+  if (bake.signature !== existing.signature) {
+    console.warn(`saved puzzle signature mismatch (expected ${existing.signature}, got ${bake.signature}), starting fresh instead`)
+    return null
+  }
+
+  const state = restorePuzzleState(bake, existing.state)
+  return { bake, state, workingImageBlob: existing.workingImage }
+}
+
+async function runStress(): Promise<void>{
+  const existing = await getLatestSave();
+  const resumed = existing ? await tryResume(existing) : null;
+  const { bake, state, workingImageBlob } = resumed ?? await freshPuzzle();
+
+  readout.textContent = `${bake.pieces.length} pieces, ${bake.atlases.length} sheet(s), signature ${bake.signature}${resumed ? ' (resumed from save)' : ''}. Press s to save.`;
   // Phase 7.3's determinism gate is verified across two full page loads, not by calling assembleAtlases
   // twice in one process, see docs/roadmap.md. This line is what a browser check reads.
   console.log(`puzzle signature: ${bake.signature}`);
@@ -101,14 +159,6 @@ async function runStress(): Promise<void>{
   const sources = bake.atlases.map((atlas)=> new ImageSource({resource: atlas}));
 
   const board = new Container();
-
-  // The real state layer, not local Maps: positions, cluster membership and who is holding what all
-  // live in PuzzleState now, moved out of this throwaway page and into state/ for real at Phase 7. See
-  // D23. Scattered rather than left at solved, same seeded reasoning as before: a reload scatters the
-  // same way twice.
-  const state: PuzzleState = createPuzzleState(bake);
-  const scatterRng = makeRng(SEED, 'scatter');
-  scatterPieces(state, bake.working, scatterRng);
 
   // Spatial hash: cell size from real data, the square root of average area per piece, not a guess. A
   // piece bigger than one cell registers into every cell its bbox touches, so a query only ever has to
@@ -250,6 +300,23 @@ async function runStress(): Promise<void>{
     renderPanel(harness, clusterLines);
   });
 
+  // 7.4's own gate: save, reload the page, resume, pieces are exactly where they were left. cutOptions
+  // is saved as {} here, this page never passes custom warp/tabs to requestBake, a real UI slider would
+  // fill this in once Phase 8 has one.
+  onKeyPress('s', async () => {
+    const record: SavedPuzzle = {
+      signature: bake.signature,
+      seed: bake.seed,
+      grid: bake.grid,
+      cutOptions: {},
+      workingImage: workingImageBlob,
+      state: serializePuzzleState(state),
+      savedAt: Date.now(),
+    };
+    await savePuzzle(record);
+    readout.textContent = `saved at ${new Date(record.savedAt).toLocaleTimeString()}. Reload the page to resume.`;
+  });
+
   let zoom = MIN_ZOOM;
   const canvas = app.canvas;
   const fitScale = Math.min(canvasHost.clientWidth/bake.working.w,canvasHost.clientHeight/bake.working.h);
@@ -368,6 +435,8 @@ async function runStress(): Promise<void>{
   (window as unknown as { __stress?: unknown }).__stress = {
     bake, state, clusters, board,
     refreshHash: () => { spatialHash = buildSpatialHash(state, cellSize) },
+    resumed: resumed !== null,
+    clearSave: () => deletePuzzle(bake.signature),
   };
 }
 
@@ -410,9 +479,12 @@ function requestTreat(source: ImageBitmap, size: WorkingSize): Promise<{plain: I
       })
 }
 
-function requestBake(image: ImageBitmap, grid: Grid): Promise<BakeResponse &{type: 'result'}>{
+// seed/warp/tabs default to this page's own constants, but a resumed puzzle passes back whatever it was
+// actually baked with (D22: cutOptions is not part of the signature, so reproducing the exact same
+// geometry on resume depends on this, not on the signature check).
+function requestBake(image: ImageBitmap, grid: Grid, seed: number = SEED, warp?: WarpOptions, tabs?: TabOptions): Promise<BakeResult>{
 
-     return new Promise<BakeResponse & {type: `result`}>((resolve, reject)=>{
+     return new Promise<BakeResult>((resolve, reject)=>{
        function handleMessage(event: MessageEvent<BakeResponse>): void{
         const message = event.data;
         if(message.type === 'progress'){
@@ -429,7 +501,7 @@ function requestBake(image: ImageBitmap, grid: Grid): Promise<BakeResponse &{typ
        }
 
        stressWorker.addEventListener('message', handleMessage);
-       const request: BakeRequest = {type: 'bake', image, grid, seed:SEED};
+       const request: BakeRequest = {type: 'bake', image, grid, seed, warp, tabs};
        stressWorker.postMessage(request, [image]);
 
        if(image.width !==0){
@@ -437,5 +509,7 @@ function requestBake(image: ImageBitmap, grid: Grid): Promise<BakeResponse &{typ
        }
     })
 }
+
+type BakeResult = BakeResponse & { type: 'result' }
 
 void runStress();

@@ -14,3 +14,9 @@ export type { SpatialHash } from './spatialHash'
 
 export { applyCommand, createCommandContext } from './commands'
 export type { Command, PickUp, Move, Drop, Merge, CommandContext } from './commands'
+
+export { serializePuzzleState, restorePuzzleState } from './save'
+export type { SavedPuzzleState } from './save'
+
+export { savePuzzle, loadPuzzle, listPuzzles, getLatestSave, deletePuzzle, imageBitmapToPngBlob } from './storage'
+export type { SavedPuzzle } from './storage'
