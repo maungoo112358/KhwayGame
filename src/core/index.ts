@@ -37,7 +37,7 @@ export { createWarpedGridGeometry } from './geometry'
 export type { PieceGeometry, PieceGeometryProvider, GeometryOptions, Neighbors } from './geometry'
 
 // Baking. One piece of geometry plus the treated image in, one piece of cardboard out.
-export { bakePiece } from './bake'
+export { bakePiece, ALPHA_MASK_SCALE } from './bake'
 export type { CardboardOptions } from './bake'
 
 // Atlas packing. Rectangle sizes in, sheet assignments and positions out. No pixels touched here.

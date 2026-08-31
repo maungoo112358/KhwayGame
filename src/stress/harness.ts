@@ -82,6 +82,67 @@ export function scriptedPan(ticker: Ticker, board: Container, distanceX: number,
   })
 }
 
+// Same shape as scriptedPan, ticker-driven so two runs are comparable, but moves a plain probe point
+// instead of the board, and calls the caller's pick function directly against it every tick, timed under
+// the given label. The naive pick test costs roughly the same regardless of where the probe is (it checks
+// every piece regardless of a hit), so the exact path matters far less here than it did for panning.
+export function scriptedProbe(
+  ticker: Ticker,
+  startX: number,
+  startY: number,
+  distanceX: number,
+  distanceY: number,
+  durationMs: number,
+  label: string,
+  pick: (point: { x: number; y: number }) => void,
+): Promise<void> {
+  return new Promise((resolve) => {
+    let elapsed = 0
+
+    function onTick(tick: Ticker): void {
+      elapsed += tick.deltaMS
+      const progress = Math.min(elapsed / durationMs, 1)
+      const point = { x: startX + distanceX * progress, y: startY + distanceY * progress }
+      measure(label, () => pick(point))
+
+      if (progress >= 1) {
+        ticker.remove(onTick)
+        resolve()
+      }
+    }
+
+    ticker.add(onTick)
+  })
+}
+
+// Same ticker-driven, progress-based shape as scriptedPan, but hands the caller each tick's incremental
+// delta instead of setting one absolute position, since what moves here is many individual sprite
+// positions (a whole cluster), not one container's own transform.
+export function scriptedClusterMove(ticker: Ticker, distanceX: number, distanceY: number, durationMs: number, onMove: (deltaX: number, deltaY: number) => void): Promise<void> {
+  return new Promise((resolve) => {
+    let elapsed = 0;
+    let movedX = 0;
+    let movedY = 0;
+
+    function onTick(tick: Ticker): void {
+      elapsed += tick.deltaMS;
+      const progress = Math.min(elapsed / durationMs, 1);
+      const targetX = distanceX * progress;
+      const targetY = distanceY * progress;
+      onMove(targetX - movedX, targetY - movedY);
+      movedX = targetX;
+      movedY = targetY;
+
+      if (progress >= 1) {
+        ticker.remove(onTick);
+        resolve();
+      }
+    }
+
+    ticker.add(onTick);
+  });
+}
+
 interface Measurement {
   label: string
   ms: number

@@ -102,9 +102,14 @@ describe('packAtlas', () => {
 
     const result = packAtlas(rects)
 
-    // Measured: 999 pieces, one sheet, 77.6% efficiency. docs/ARCHITECTURE.md's "154px, two sheets"
-    // estimate assumed every piece hits maximum tab overhang, worst case rather than typical, so real
-    // output at default warp and tab settings comfortably beats the budget it was written against.
+    // Measured here: 999 pieces, one sheet, 77.6% efficiency. That one-sheet result is specific to this
+    // test's synthetic setup, chooseGrid's output goes straight into geometry without passing through
+    // workingSize first, so these pieces land around 84px rather than the real 110px TARGET_PIECE_SIZE.
+    // The real bake pipeline, which does go through workingSize, needs two sheets at the real target,
+    // confirmed twice: the Phase 3.6 bake and Phase 5.1's stress view both produced 999 pieces, two
+    // sheets. See docs/architecture.md's VRAM budget (134MB, two sheets) and docs/status.md, this test's
+    // own comment used to read as if "one sheet" validated the real target, it does not, and the
+    // assertion below is deliberately loose (2 or fewer) to allow for that.
     expect(result.sheetCount).toBeLessThanOrEqual(2)
     expect(result.efficiency).toBeGreaterThan(0.7)
   })

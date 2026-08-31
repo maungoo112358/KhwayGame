@@ -44,7 +44,7 @@ const DEFAULT_RIM_COLOR_DARK = "#7C6448";
 const DEFAULT_RIM_OFFSET = 6;
 const DEFAULT_CRUSH_WIDTH = 2;
 const DEFAULT_CRUSH_ALPHA = 0.5;
-const ALPHA_MASK_SCALE = 0.5;
+export const ALPHA_MASK_SCALE = 0.5;
 
 function outlinePath(points: Point[]): Path2D {
   const path = new Path2D();
