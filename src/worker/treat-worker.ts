@@ -35,12 +35,13 @@ function handleBake(request: BakeRequest): void {
   const pieces = createWarpedGridGeometry({ grid, seed, warp, tabs }).pieces()
 
   const started = performance.now()
-  const { atlases, pieces: assembled,working } = assembleAtlases(pieces, image, grid, seed, {
+  const build = assembleAtlases(pieces, image, grid, seed, {
     onProgress: (completed, total) => reply({ type: 'progress', stage: 'baking', completed, total }),
   })
   const bakeMs = performance.now() - started
-  
-  reply({ type: 'result', atlases, pieces: assembled, bakeMs,working }, atlases)
+
+  const { atlases, pieces: assembled, working, version, signature } = build
+  reply({ type: 'result', atlases, pieces: assembled, bakeMs, working, version, signature, seed: build.seed, grid: build.grid }, atlases)
 }
 
 function handleKuwahara(request: KuwaharaRequest): void {

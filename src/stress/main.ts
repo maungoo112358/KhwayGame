@@ -1,7 +1,12 @@
 import { Container, ImageSource, Rectangle, Sprite, Texture } from "pixi.js";
-import { ALPHA_MASK_SCALE, chooseGrid, makeRng, workingSize, type AssembledPiece, type Grid, type Point, type WorkingSize } from "../core"
+import { chooseGrid, makeRng, workingSize, type Grid, type WorkingSize } from "../core"
 import { createApp } from "../render/app";
 import type { BakeRequest, BakeResponse, TreatRequest, TreatResponse } from "../worker/protocol";
+import {
+  applyCommand, buildSpatialHash, createClusterIndex, createCommandContext, createPuzzleState,
+  pickAt, pickAtNaive, scatterPieces,
+  type ClusterIndex, type CommandContext, type PuzzleState, type SpatialHash,
+} from "../state";
 import { clearMeasurements, createFrameRecorder, measurementsFor, onKeyPress, passesFrameBudget, percentiles, readMemory, renderPanel, scriptedClusterMove, scriptedPan, scriptedProbe } from "./harness";
 
 
@@ -17,6 +22,11 @@ const harness = need<HTMLDivElement>("#harness");
 
 const TARGET_PIECES = 1000;
 const SEED = 20260818;
+
+// This page is single player. A real actor id exists because state/commands.ts already refuses to
+// assume one player, per docs/architecture.md's forward compatibility notes, not because anything here
+// is multiplayer yet.
+const LOCAL_ACTOR = 0;
 
 const MIN_ZOOM = 1
 const MAX_ZOOM = 40
@@ -81,7 +91,10 @@ async function runStress(): Promise<void>{
   grid = chooseGrid(TARGET_PIECES,image.width, image.height);
   const bake = await requestBake(image,grid);
 
-  readout.textContent = `${bake.pieces.length} pieces, ${bake.atlases.length} sheet(s), baked in ${bake.bakeMs.toFixed(0)}ms`;
+  readout.textContent = `${bake.pieces.length} pieces, ${bake.atlases.length} sheet(s), baked in ${bake.bakeMs.toFixed(0)}ms, signature ${bake.signature}`;
+  // Phase 7.3's determinism gate is verified across two full page loads, not by calling assembleAtlases
+  // twice in one process, see docs/roadmap.md. This line is what a browser check reads.
+  console.log(`puzzle signature: ${bake.signature}`);
 
   const {app} = await createApp(canvasHost);
 
@@ -89,76 +102,40 @@ async function runStress(): Promise<void>{
 
   const board = new Container();
 
-  // One mutable current position per piece, independent of solved, this is what scattering (5.5) and
-  // later dragging (5.9) actually move. Seeded so a reload scatters the same way twice.
+  // The real state layer, not local Maps: positions, cluster membership and who is holding what all
+  // live in PuzzleState now, moved out of this throwaway page and into state/ for real at Phase 7. See
+  // D23. Scattered rather than left at solved, same seeded reasoning as before: a reload scatters the
+  // same way twice.
+  const state: PuzzleState = createPuzzleState(bake);
   const scatterRng = makeRng(SEED, 'scatter');
-  const current = new Map<number, Point>();
-  bake.pieces.forEach((piece) => {
-    current.set(piece.id, {
-      x: scatterRng.range(0, Math.max(0, bake.working.w - piece.frame.width)),
-      y: scatterRng.range(0, Math.max(0, bake.working.h - piece.frame.height)),
-    });
-  });
+  scatterPieces(state, bake.working, scatterRng);
 
-  // Spatial hash: cell size from real data, the square root of average area per piece, not a guess.
-  // A piece bigger than one cell registers into every cell its bbox touches, so a query only ever has to
+  // Spatial hash: cell size from real data, the square root of average area per piece, not a guess. A
+  // piece bigger than one cell registers into every cell its bbox touches, so a query only ever has to
   // check the handful of pieces actually near a point, not all of them.
   const cellSize = Math.sqrt((bake.working.w * bake.working.h) / bake.pieces.length);
-  const piecesById = new Map(bake.pieces.map((piece) => [piece.id, piece]));
-  let spatialHash = buildSpatialHash(bake.pieces, current, cellSize);
+  let spatialHash: SpatialHash = buildSpatialHash(state, cellSize);
 
-  // Flat parent-pointer union-find over piece ids, this and the snap/merge logic below are the real,
-  // reusable mechanics docs/roadmap.md calls out as outliving this throwaway page.
-  const unionFind = createUnionFind(bake.pieces.length);
+  // Cluster membership and the command layer that mutates state, both real state/ mechanics now rather
+  // than this page's own copies.
+  const clusters: ClusterIndex = createClusterIndex(state.parent);
   // A fraction of real piece size, not an arbitrary pixel count.
   const snapDistance = cellSize * 0.3;
+  const commandCtx: CommandContext = createCommandContext(state, clusters, snapDistance);
   const spritesById = new Map<number, Sprite>();
 
-  function moveSprite(id: number, position: Point): void {
+  function moveSprite(id: number): void {
     const sprite = spritesById.get(id)!;
-    const piece = piecesById.get(id)!;
-    sprite.position.set(position.x - piece.anchor.x, position.y - piece.anchor.y);
-  }
-
-  // Checks the dragged piece's real grid neighbours, not proximity to any piece. Once merged, a group's
-  // internal offsets never drift (every drag moves the whole group by one shared delta), so correcting
-  // only the dragged piece's own existing group is enough, the neighbour's group is already consistent.
-  function trySnap(pieceId: number): void {
-    const piece = piecesById.get(pieceId)!;
-
-    for (const neighborId of piece.neighbors) {
-      if (neighborId === null) continue;
-      if (unionFind.find(pieceId) === unionFind.find(neighborId)) continue;
-
-      const neighbor = piecesById.get(neighborId)!;
-      const neighborCurrent = current.get(neighborId)!;
-      const pieceCurrent = current.get(pieceId)!;
-      const target = {
-        x: neighborCurrent.x + (piece.solved.x - neighbor.solved.x),
-        y: neighborCurrent.y + (piece.solved.y - neighbor.solved.y),
-      };
-
-      if (Math.hypot(target.x - pieceCurrent.x, target.y - pieceCurrent.y) > snapDistance) continue;
-
-      const deltaX = target.x - pieceCurrent.x;
-      const deltaY = target.y - pieceCurrent.y;
-      for (const memberId of unionFind.membersOf(pieceId)) {
-        const memberCurrent = current.get(memberId)!;
-        memberCurrent.x += deltaX;
-        memberCurrent.y += deltaY;
-        moveSprite(memberId, memberCurrent);
-      }
-
-      unionFind.union(pieceId, neighborId);
-      return;
-    }
+    const piece = state.pieces[id]!;
+    sprite.position.set(state.x[id]! - piece.anchor.x, state.y[id]! - piece.anchor.y);
   }
 
   // Walks the real neighbour graph breadth-first from one piece, unioning and instantly repositioning
-  // each newly reached piece to its correct rigid offset, the same formula trySnap uses, just applied
-  // directly instead of gated behind a live drag's snap distance. Idempotent: re-running just re-confirms
-  // pieces that are already correctly placed. Returns the id any member of the finished cluster can be
-  // looked up from.
+  // each newly reached piece to its correct rigid offset. Test scaffolding for the 'c' benchmark key
+  // only, a real player never issues a command like this, so it works directly against clusters and
+  // state rather than going through PickUp/Move/Drop. Idempotent: re-running just re-confirms pieces
+  // that are already correctly placed. Returns the id any member of the finished cluster can be looked
+  // up from.
   function buildTestCluster(size: number): number {
     const startId = 0;
     const visited = new Set<number>([startId]);
@@ -166,25 +143,23 @@ async function runStress(): Promise<void>{
 
     while (queue.length > 0 && visited.size < size) {
       const anchorId = queue.shift()!;
-      const anchor = piecesById.get(anchorId)!;
+      const anchor = state.pieces[anchorId]!;
 
       for (const neighborId of anchor.neighbors) {
         if (neighborId === null || visited.has(neighborId) || visited.size >= size) continue;
 
-        const neighbor = piecesById.get(neighborId)!;
-        const anchorCurrent = current.get(anchorId)!;
-        const neighborCurrent = current.get(neighborId)!;
-        neighborCurrent.x = anchorCurrent.x + (neighbor.solved.x - anchor.solved.x);
-        neighborCurrent.y = anchorCurrent.y + (neighbor.solved.y - anchor.solved.y);
-        moveSprite(neighborId, neighborCurrent);
+        const neighbor = state.pieces[neighborId]!;
+        state.x[neighborId] = state.x[anchorId]! + (neighbor.solved.x - anchor.solved.x);
+        state.y[neighborId] = state.y[anchorId]! + (neighbor.solved.y - anchor.solved.y);
+        moveSprite(neighborId);
 
-        unionFind.union(anchorId, neighborId);
+        clusters.union(anchorId, neighborId);
         visited.add(neighborId);
         queue.push(neighborId);
       }
     }
 
-    spatialHash = buildSpatialHash(bake.pieces, current, cellSize);
+    spatialHash = buildSpatialHash(state, cellSize);
     return startId;
   }
 
@@ -215,7 +190,7 @@ async function runStress(): Promise<void>{
   onKeyPress('l', async () => {
     clearMeasurements('pick-naive');
     await scriptedProbe(app.ticker, 0, 0, bake.working.w, bake.working.h, 1500, 'pick-naive', (point) => {
-      pickPieceAt(point, bake.pieces, current);
+      pickAtNaive(point, state);
     });
 
     const pickTiles = percentiles(measurementsFor('pick-naive'));
@@ -232,7 +207,7 @@ async function runStress(): Promise<void>{
   onKeyPress('h', async () => {
     clearMeasurements('pick-spatial');
     await scriptedProbe(app.ticker, 0, 0, bake.working.w, bake.working.h, 1500, 'pick-spatial', (point) => {
-      pickPieceAtHashed(point, spatialHash, piecesById, cellSize, current);
+      pickAt(point, spatialHash, state);
     });
 
     const hashTiles = percentiles(measurementsFor('pick-spatial'));
@@ -250,15 +225,14 @@ async function runStress(): Promise<void>{
 
   onKeyPress('c', async () => {
     const clusterMemberId = buildTestCluster(CLUSTER_TEST_SIZE);
-    const memberCount = unionFind.membersOf(clusterMemberId).size;
+    const memberCount = clusters.membersOf(clusterMemberId).size;
 
     recorder.start();
     await scriptedClusterMove(app.ticker, 300, 150, 1500, (deltaX, deltaY) => {
-      for (const memberId of unionFind.membersOf(clusterMemberId)) {
-        const memberCurrent = current.get(memberId)!;
-        memberCurrent.x += deltaX;
-        memberCurrent.y += deltaY;
-        moveSprite(memberId, memberCurrent);
+      for (const memberId of clusters.membersOf(clusterMemberId)) {
+        state.x[memberId] = state.x[memberId]! + deltaX;
+        state.y[memberId] = state.y[memberId]! + deltaY;
+        moveSprite(memberId);
       }
     });
     recorder.stop();
@@ -280,7 +254,7 @@ async function runStress(): Promise<void>{
   const canvas = app.canvas;
   const fitScale = Math.min(canvasHost.clientWidth/bake.working.w,canvasHost.clientHeight/bake.working.h);
   board.scale.set(fitScale);
-  
+
     canvas.addEventListener('wheel', (event)=>{
       event.preventDefault();
       const bounds = app.canvas.getBoundingClientRect();
@@ -310,13 +284,14 @@ async function runStress(): Promise<void>{
     const cursorY = event.clientY - bounds.top;
     const contentX = (cursorX - board.position.x) / board.scale.x;
     const contentY = (cursorY - board.position.y) / board.scale.y;
-    const picked = pickPieceAtHashed({ x: contentX, y: contentY }, spatialHash, piecesById, cellSize, current);
+    const picked = pickAt({ x: contentX, y: contentY }, spatialHash, state);
 
     canvas.setPointerCapture(event.pointerId);
     canvas.classList.add('dragging');
 
     if (picked) {
       draggingPiece = { pointerId: event.pointerId, pieceId: picked.id, x: event.clientX, y: event.clientY };
+      applyCommand(commandCtx, { type: 'PickUp', pieceId: picked.id, actorId: LOCAL_ACTOR });
     } else {
       dragging = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
     }
@@ -327,14 +302,9 @@ async function runStress(): Promise<void>{
       const deltaX = (event.clientX - draggingPiece.x) / board.scale.x;
       const deltaY = (event.clientY - draggingPiece.y) / board.scale.y;
 
-      for (const memberId of unionFind.membersOf(draggingPiece.pieceId)) {
-        const memberCurrent = current.get(memberId)!;
-        memberCurrent.x += deltaX;
-        memberCurrent.y += deltaY;
-        moveSprite(memberId, memberCurrent);
-      }
+      applyCommand(commandCtx, { type: 'Move', actorId: LOCAL_ACTOR, dx: deltaX, dy: deltaY });
+      for (const memberId of clusters.membersOf(draggingPiece.pieceId)) moveSprite(memberId);
 
-      trySnap(draggingPiece.pieceId);
       draggingPiece = { ...draggingPiece, x: event.clientX, y: event.clientY };
       return;
     }
@@ -357,7 +327,10 @@ async function runStress(): Promise<void>{
     canvas.addEventListener(type, () => {
       // Positions moved during a piece drag, the hash built at scatter time (or last drop) is stale for
       // whatever just moved. Rebuilding once here is cheap next to patching every cell on every frame.
-      if (draggingPiece !== null) spatialHash = buildSpatialHash(bake.pieces, current, cellSize);
+      if (draggingPiece !== null) {
+        applyCommand(commandCtx, { type: 'Drop', actorId: LOCAL_ACTOR });
+        spatialHash = buildSpatialHash(state, cellSize);
+      }
       dragging = null
       draggingPiece = null
       canvas.classList.remove('dragging')
@@ -374,7 +347,7 @@ async function runStress(): Promise<void>{
     const contentX = (cursorX - board.position.x) / board.scale.x;
     const contentY = (cursorY - board.position.y) / board.scale.y;
 
-    const picked = pickPieceAtHashed({ x: contentX, y: contentY }, spatialHash, piecesById, cellSize, current);
+    const picked = pickAt({ x: contentX, y: contentY }, spatialHash, state);
     const pickedId = picked ? picked.id : null;
     if (pickedId !== lastPickedId) {
       console.log(pickedId === null ? 'picked: none' : `picked: piece ${pickedId}`);
@@ -383,155 +356,29 @@ async function runStress(): Promise<void>{
   });
 
   app.stage.addChild(board);
-  bake.pieces.forEach((piece)=>{
-    const sprite = buildPieceSprite(piece, sources, current.get(piece.id)!)
-    spritesById.set(piece.id, sprite);
+  for (let id = 0; id < state.pieceCount; id++) {
+    const sprite = buildPieceSprite(state, id, sources);
+    spritesById.set(id, sprite);
     board.addChild(sprite);
-  });
-
-  // Debug hook for this stress page's own verification tooling only, not part of the game.
-  (window as unknown as { __stress?: unknown }).__stress = { bake, current, board, unionFind };
-}
-
-interface UnionFind {
-  find(id: number): number;
-  union(a: number, b: number): void;
-  membersOf(id: number): Set<number>;
-}
-
-// Flat Int32Array of parent pointers is the real backbone, path compressed on find. The root -> member
-// set map is bookkeeping on top: raw union-find can answer "are these two in the same group" but not
-// "who else is in my group", and cluster dragging needs that second answer every frame, not just at merge
-// time. Union by size (merge the smaller member set into the larger) keeps that bookkeeping cheap too.
-function createUnionFind(size: number): UnionFind {
-  const parent = new Int32Array(size);
-  const groups = new Map<number, Set<number>>();
-  for (let i = 0; i < size; i++) {
-    parent[i] = i;
-    groups.set(i, new Set([i]));
   }
 
-  function find(id: number): number {
-    let root = id;
-    while (parent[root] !== root) root = parent[root]!;
-
-    let node = id;
-    while (parent[node] !== root) {
-      const next = parent[node]!;
-      parent[node] = root;
-      node = next;
-    }
-    return root;
-  }
-
-  function union(a: number, b: number): void {
-    const rootA = find(a);
-    const rootB = find(b);
-    if (rootA === rootB) return;
-
-    const membersA = groups.get(rootA)!;
-    const membersB = groups.get(rootB)!;
-    const bigger = membersA.size >= membersB.size ? rootA : rootB;
-    const smaller = bigger === rootA ? rootB : rootA;
-    const biggerMembers = groups.get(bigger)!;
-    const smallerMembers = groups.get(smaller)!;
-
-    for (const id of smallerMembers) biggerMembers.add(id);
-    groups.delete(smaller);
-    parent[smaller] = bigger;
-  }
-
-  function membersOf(id: number): Set<number> {
-    return groups.get(find(id))!;
-  }
-
-  return { find, union, membersOf };
+  // Debug hook for this stress page's own verification tooling only, not part of the game. refreshHash
+  // exists so an external script can move a piece directly (bypassing the pointer path) and still have
+  // picking find it afterward, without reaching into this closure's own spatialHash variable.
+  (window as unknown as { __stress?: unknown }).__stress = {
+    bake, state, clusters, board,
+    refreshHash: () => { spatialHash = buildSpatialHash(state, cellSize) },
+  };
 }
 
-function buildPieceSprite(piece: AssembledPiece, sources: ImageSource[], current: Point): Sprite{
+function buildPieceSprite(state: PuzzleState, id: number, sources: ImageSource[]): Sprite {
+  const piece = state.pieces[id]!;
+  const frame = new Rectangle(piece.frame.x, piece.frame.y, piece.frame.width, piece.frame.height);
+  const texture = new Texture({ source: sources[piece.atlas]!, frame });
 
-  const frame = new Rectangle(piece.frame.x, piece.frame.y, piece.frame.width,piece.frame.height);
-  const texture = new Texture({source: sources[piece.atlas]!, frame});
-
-  const pieceSprite = new Sprite(texture);
-  pieceSprite.position.set(current.x-piece.anchor.x, current.y-piece.anchor.y);
-  return pieceSprite;
-}
-
-// current is where the piece's anchor point actually sits right now (solved before 5.5, scattered after).
-// current - anchor is therefore the same top-left corner the sprite is drawn from, and the same corner
-// pieceAlphaMask built its mask relative to, which is what makes this conversion correct.
-function pointInPieceMask(piece: AssembledPiece, current: Point, point: Point): boolean {
-  const localX = (point.x - (current.x - piece.anchor.x)) * ALPHA_MASK_SCALE;
-  const localY = (point.y - (current.y - piece.anchor.y)) * ALPHA_MASK_SCALE;
-  const mx = Math.floor(localX);
-  const my = Math.floor(localY);
-  if (mx < 0 || mx >= piece.alphaMask.w || my < 0 || my >= piece.alphaMask.h) return false;
-
-  const pixelIndex = my * piece.alphaMask.w + mx;
-  const byteIndex = pixelIndex >> 3;
-  const bitIndex = pixelIndex & 7;
-  return (piece.alphaMask.bits[byteIndex]! & (1 << bitIndex)) !== 0;
-}
-
-// Deliberately naive: checks every piece, never exits early, this is the baseline 5.6 measures and 5.7's
-// spatial hash replaces. Later matches overwrite earlier ones, so among overlapping pieces the one drawn
-// on top (added to board last, highest id) wins, matching what the player would actually see and expect.
-function pickPieceAt(point: Point, pieces: AssembledPiece[], current: Map<number, Point>): AssembledPiece | null {
-  let picked: AssembledPiece | null = null;
-  for (const piece of pieces) {
-    if (pointInPieceMask(piece, current.get(piece.id)!, point)) picked = piece;
-  }
-  return picked;
-}
-
-function cellKey(cellX: number, cellY: number): string {
-  return `${cellX},${cellY}`;
-}
-
-// Every piece registers into every cell its rendered bbox touches, current position plus frame size, not
-// just the cell its corner happens to land in, otherwise a piece straddling a cell boundary would go
-// missing from queries against its other cells.
-function buildSpatialHash(pieces: AssembledPiece[], current: Map<number, Point>, cellSize: number): Map<string, number[]> {
-  const hash = new Map<string, number[]>();
-
-  for (const piece of pieces) {
-    const pos = current.get(piece.id)!;
-    const left = pos.x - piece.anchor.x;
-    const top = pos.y - piece.anchor.y;
-
-    const cellX0 = Math.floor(left / cellSize);
-    const cellX1 = Math.floor((left + piece.frame.width) / cellSize);
-    const cellY0 = Math.floor(top / cellSize);
-    const cellY1 = Math.floor((top + piece.frame.height) / cellSize);
-
-    for (let cy = cellY0; cy <= cellY1; cy++) {
-      for (let cx = cellX0; cx <= cellX1; cx++) {
-        const key = cellKey(cx, cy);
-        const bucket = hash.get(key);
-        if (bucket) bucket.push(piece.id);
-        else hash.set(key, [piece.id]);
-      }
-    }
-  }
-
-  return hash;
-}
-
-// Same precise pointInPieceMask test as the naive version, only the candidate list is different: whatever
-// is registered in the one cell the point falls in, instead of every piece on the board.
-function pickPieceAtHashed(point: Point, hash: Map<string, number[]>, piecesById: Map<number, AssembledPiece>, cellSize: number, current: Map<number, Point>): AssembledPiece | null {
-  const cellX = Math.floor(point.x / cellSize);
-  const cellY = Math.floor(point.y / cellSize);
-  const candidates = hash.get(cellKey(cellX, cellY));
-  if (!candidates) return null;
-
-  let picked: AssembledPiece | null = null;
-  for (const id of candidates) {
-    const piece = piecesById.get(id)!;
-    if (pointInPieceMask(piece, current.get(id)!, point)) picked = piece;
-  }
-  return picked;
+  const sprite = new Sprite(texture);
+  sprite.position.set(state.x[id]! - piece.anchor.x, state.y[id]! - piece.anchor.y);
+  return sprite;
 }
 
 const stressWorker = new Worker(new URL('../worker/treat-worker.ts', import.meta.url), { type: 'module' });
@@ -544,7 +391,7 @@ function requestTreat(source: ImageBitmap, size: WorkingSize): Promise<{plain: I
         readout.textContent = `${message.stage}...`;
         return;
       }
-      
+
       stressWorker.removeEventListener('message', handleMessage);
       if(message.type === 'error'){
         reject(new Error(message.message));
@@ -564,7 +411,7 @@ function requestTreat(source: ImageBitmap, size: WorkingSize): Promise<{plain: I
 }
 
 function requestBake(image: ImageBitmap, grid: Grid): Promise<BakeResponse &{type: 'result'}>{
-  
+
      return new Promise<BakeResponse & {type: `result`}>((resolve, reject)=>{
        function handleMessage(event: MessageEvent<BakeResponse>): void{
         const message = event.data;

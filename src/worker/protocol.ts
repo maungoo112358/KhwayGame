@@ -26,9 +26,24 @@ export interface BakeRequest {
 
 // One progress event every so often while baking, not one per piece. At 1000 pieces that would be 1000
 // postMessage calls competing with the baking itself for the thread.
+//
+// version, signature, seed and grid were added at Phase 7 (7.3), closing the gap Phase 4 left open:
+// assembleAtlases has computed the full PuzzleBuild since Phase 4, but this type only carried
+// atlases/pieces/bakeMs/working, so the rest never left the worker. See D22 and the "Deliberately
+// deferred" table in docs/status.md.
 export type BakeResponse =
   | { type: 'progress'; stage: 'baking'; completed: number; total: number }
-  | { type: 'result'; atlases: ImageBitmap[]; pieces: AssembledPiece[]; bakeMs: number; working: {w:number; h:number} }
+  | {
+      type: 'result'
+      atlases: ImageBitmap[]
+      pieces: AssembledPiece[]
+      bakeMs: number
+      working: { w: number; h: number }
+      version: number
+      signature: string
+      seed: number
+      grid: { cols: number; rows: number }
+    }
   | { type: 'error'; message: string }
 
 // Separate from `treat`: this runs against an already ingested image, not a raw upload, so it never
