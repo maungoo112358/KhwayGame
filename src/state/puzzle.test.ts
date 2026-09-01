@@ -1,8 +1,35 @@
 import { describe, it, expect } from 'vitest'
-import { createPuzzleState, scatterPieces, isSolved } from './puzzle'
+import { createPuzzleState, scatterBounds, scatterPieces, scatterWithTestCluster, isSolved } from './puzzle'
 import { createClusterIndex } from './unionFind'
-import { makeRng } from '../core'
+import { makeRng, type PuzzleBuild } from '../core'
 import { makeTestBuild } from './testFixtures'
+
+// Every piece in makeTestBuild's own fixture is identically sized, which is exactly what let the shelf
+// packing bug hide from every test built on it: a placement algorithm that assumes uniform piece size
+// has nothing to disagree with there. Real baked pieces vary, tab overhang runs up to roughly 40% over
+// nominal per docs/architecture.md. This gives each piece a different size, up to 60% over base, deliberately
+// more variance than the real worst case, so a test built on it is a harder case than production, not an
+// easier one.
+function withVariedFrameSizes(build: PuzzleBuild, baseSize: number): PuzzleBuild {
+  return {
+    ...build,
+    pieces: build.pieces.map((piece, i) => ({
+      ...piece,
+      frame: { ...piece.frame, width: baseSize * (1 + (i % 5) * 0.15), height: baseSize * (1 + ((i + 2) % 5) * 0.15) },
+    })),
+  }
+}
+
+function overlaps(state: ReturnType<typeof createPuzzleState>, a: number, b: number): boolean {
+  const framA = state.pieces[a]!.frame
+  const framB = state.pieces[b]!.frame
+  return (
+    state.x[a]! < state.x[b]! + framB.width &&
+    state.x[a]! + framA.width > state.x[b]! &&
+    state.y[a]! < state.y[b]! + framB.height &&
+    state.y[a]! + framA.height > state.y[b]!
+  )
+}
 
 describe('createPuzzleState', () => {
   it('starts every piece at its solved position', () => {
@@ -33,21 +60,32 @@ describe('createPuzzleState', () => {
 })
 
 describe('scatterPieces', () => {
-  it('keeps every piece within bounds', () => {
+  it('keeps every piece within the area it reports having used', () => {
     const build = makeTestBuild(4, 4, 50)
     const state = createPuzzleState(build)
-    const bounds = { w: 800, h: 600 }
     const rng = makeRng(1, 'scatter-test')
 
-    scatterPieces(state, bounds, rng)
+    const used = scatterPieces(state, { w: 800, h: 600 }, rng)
 
     for (let id = 0; id < state.pieceCount; id++) {
       const piece = state.pieces[id]!
       expect(state.x[id]).toBeGreaterThanOrEqual(0)
       expect(state.y[id]).toBeGreaterThanOrEqual(0)
-      expect(state.x[id]! + piece.frame.width).toBeLessThanOrEqual(bounds.w)
-      expect(state.y[id]! + piece.frame.height).toBeLessThanOrEqual(bounds.h)
+      expect(state.x[id]! + piece.frame.width).toBeLessThanOrEqual(used.w)
+      expect(state.y[id]! + piece.frame.height).toBeLessThanOrEqual(used.h)
     }
+  })
+
+  it('never lets a row grow past the requested width', () => {
+    const build = makeTestBuild(4, 4, 50)
+    const state = createPuzzleState(build)
+    const rng = makeRng(1, 'scatter-test')
+
+    const used = scatterPieces(state, { w: 800, h: 600 }, rng)
+
+    // Shelf packing wraps to a new row rather than exceeding the requested width, height is allowed to
+    // grow as far as it needs to instead, see PlacementBounds.
+    expect(used.w).toBeLessThanOrEqual(800)
   })
 
   it('is deterministic for a given seed', () => {
@@ -62,6 +100,127 @@ describe('scatterPieces', () => {
 
     expect(Array.from(stateA.x)).toEqual(Array.from(stateB.x))
     expect(Array.from(stateA.y)).toEqual(Array.from(stateB.y))
+  })
+
+  // The first bug this was written to catch: pieces scattered into bake.working's own zero-slack
+  // footprint (solved pieces tile it edge to edge) landed stacked on top of each other, found by hand
+  // in a real browser, not by a test that only checked bounds compliance. This checks the real property.
+  it('does not overlap any two pieces when given scatterBounds room', () => {
+    const build = makeTestBuild(6, 6, 50)
+    const state = createPuzzleState(build)
+    const bounds = scatterBounds({ w: 6 * 50, h: 6 * 50 })
+    const rng = makeRng(7, 'overlap-test')
+
+    scatterPieces(state, bounds, rng)
+
+    let comparisons = 0
+    for (let i = 0; i < state.pieceCount; i++) {
+      for (let j = i + 1; j < state.pieceCount; j++) {
+        expect(overlaps(state, i, j), `piece ${i} vs piece ${j}`).toBe(false)
+        comparisons++
+      }
+    }
+
+    // A coverage check on the check itself, same house rule as core/atlas.test.ts's overlap test: this
+    // must actually have compared a real number of pairs, not passed by inspecting nothing.
+    expect(comparisons).toBeGreaterThan(500)
+  })
+
+  // The second bug, found after the first fix: a grid of equal sized cells, sized from piece count
+  // alone, assumes every piece is the same size. Real baked pieces are not, and a bigger-than-average
+  // piece spilled into its neighbour's cell. Every test above uses makeTestBuild's own uniformly sized
+  // pieces, which cannot exercise this, this one deliberately cannot avoid it.
+  it('does not overlap any two pieces when piece sizes vary, the way real baked pieces do', () => {
+    const build = withVariedFrameSizes(makeTestBuild(10, 10, 50), 50)
+    const state = createPuzzleState(build)
+    const bounds = scatterBounds({ w: 10 * 50, h: 10 * 50 })
+    const rng = makeRng(11, 'overlap-varied-test')
+
+    scatterPieces(state, bounds, rng)
+
+    let comparisons = 0
+    for (let i = 0; i < state.pieceCount; i++) {
+      for (let j = i + 1; j < state.pieceCount; j++) {
+        expect(overlaps(state, i, j), `piece ${i} vs piece ${j}`).toBe(false)
+        comparisons++
+      }
+    }
+
+    expect(comparisons).toBeGreaterThan(4000)
+  })
+})
+
+describe('scatterWithTestCluster', () => {
+  it('places the requested patch within a small corner box', () => {
+    const build = makeTestBuild(5, 5, 50)
+    const state = createPuzzleState(build)
+    const bounds = { w: 1000, h: 1000 }
+    const rng = makeRng(1, 'scatter-test')
+
+    scatterWithTestCluster(state, bounds, rng, 10)
+
+    // Every piece in this fixture has the same 50px frame, matching how scatterWithTestCluster itself
+    // sizes the box: patchSize (50) times sqrt(patchLength / SCATTER_DENSITY (0.3)).
+    const boxSize = 50 * Math.sqrt(10 / 0.3)
+
+    // Piece 0's own neighbours in a 5 by 5 grid (row major id = row * 5 + col) are 1 (east) and 5
+    // (south), both real, both guaranteed to be in the patch by the breadth first walk.
+    for (const id of [0, 1, 5]) {
+      const piece = state.pieces[id]!
+      expect(state.x[id]).toBeGreaterThanOrEqual(0)
+      expect(state.y[id]).toBeGreaterThanOrEqual(0)
+      expect(state.x[id]! + piece.frame.width).toBeLessThanOrEqual(boxSize)
+      expect(state.y[id]! + piece.frame.height).toBeLessThanOrEqual(boxSize)
+    }
+  })
+
+  // The bug reported and found three times over. First the patch's own placement inside its box was
+  // pure uniform random. Fixed, then the patch's box turned out to still overlap whatever the general
+  // scatter separately, obliviously, also placed in that same corner, since nothing had reserved the
+  // space. Fixed, then the general scatter itself turned out to overlap real, variably sized pieces
+  // that a uniform grid cell was never sized to hold. Checks every pair in the whole puzzle, patch
+  // against patch and patch against everyone else, with varied piece sizes, all three bugs at once.
+  it('does not overlap any two pieces anywhere, patch included, varied piece sizes included', () => {
+    const build = withVariedFrameSizes(makeTestBuild(8, 8, 50), 50)
+    const state = createPuzzleState(build)
+    const bounds = scatterBounds({ w: 8 * 50, h: 8 * 50 })
+    const rng = makeRng(3, 'scatter-test')
+
+    scatterWithTestCluster(state, bounds, rng, 10)
+
+    let comparisons = 0
+    for (let i = 0; i < state.pieceCount; i++) {
+      for (let j = i + 1; j < state.pieceCount; j++) {
+        expect(overlaps(state, i, j), `piece ${i} vs piece ${j}`).toBe(false)
+        comparisons++
+      }
+    }
+    expect(comparisons).toBeGreaterThan(2000)
+  })
+
+  it('keeps every piece within the area it reports having used', () => {
+    const build = makeTestBuild(5, 5, 50)
+    const state = createPuzzleState(build)
+    const rng = makeRng(1, 'scatter-test')
+
+    const used = scatterWithTestCluster(state, { w: 1000, h: 1000 }, rng, 10)
+
+    for (let id = 0; id < state.pieceCount; id++) {
+      const piece = state.pieces[id]!
+      expect(state.x[id]).toBeGreaterThanOrEqual(0)
+      expect(state.y[id]).toBeGreaterThanOrEqual(0)
+      expect(state.x[id]! + piece.frame.width).toBeLessThanOrEqual(used.w)
+      expect(state.y[id]! + piece.frame.height).toBeLessThanOrEqual(used.h)
+    }
+  })
+
+  it('does not throw when asked for more pieces than the puzzle has', () => {
+    const build = makeTestBuild(3, 3, 100)
+    const state = createPuzzleState(build)
+    const bounds = { w: 500, h: 500 }
+    const rng = makeRng(1, 'scatter-test')
+
+    expect(() => scatterWithTestCluster(state, bounds, rng, 50)).not.toThrow()
   })
 })
 
