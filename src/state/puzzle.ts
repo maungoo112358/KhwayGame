@@ -51,8 +51,8 @@ export function scatterBounds(working: { w: number; h: number }, density: number
   return { w: working.w * scale, h: working.h * scale }
 }
 
-// Fisher-Yates over an arbitrary list of ids, not assumed to be 0..count-1: scatterWithTestCluster
-// below places only a small subset of pieces this way, not every piece in state.
+// Fisher-Yates over an arbitrary list of ids, not assumed to be 0..count-1, kept general rather than
+// baked into scatterPieces itself.
 function shuffledOrder(ids: readonly number[], rng: Rng): number[] {
   const order = ids.slice()
   for (let i = order.length - 1; i > 0; i--) {
@@ -77,8 +77,8 @@ export interface PlacementBounds {
   h: number
 }
 
-// The actual placement algorithm, shared by scatterPieces (every piece) and scatterWithTestCluster
-// (just its small patch, into its own small box): classic shelf packing, not a uniform grid. Pieces are
+// The actual placement algorithm, used by scatterPieces: classic shelf packing, not a uniform grid.
+// Pieces are
 // placed left to right using each piece's own real frame size, wrapping to a new row once a row is
 // full. This is the second attempt at this function, the first used a grid of equal sized cells sized
 // from ids.length and bounds alone, which implicitly assumed every piece is roughly the same size. Real
@@ -128,64 +128,6 @@ function placeInGrid(state: PuzzleState, ids: readonly number[], bounds: { w: nu
 export function scatterPieces(state: PuzzleState, bounds: { w: number; h: number }, rng: Rng): PlacementBounds {
   const allIds = Array.from({ length: state.pieceCount }, (_, i) => i)
   return placeInGrid(state, allIds, bounds, rng)
-}
-
-// Walks real neighbour relationships breadth first from startId until size pieces are collected (or
-// there are no more to reach, on a tiny puzzle). Used by scatterWithTestCluster to guarantee the pieces
-// it isolates actually interlock with each other, not just a random, possibly disconnected handful.
-function connectedPatch(state: PuzzleState, size: number, startId: number = 0): number[] {
-  const visited = new Set<number>([startId])
-  const queue: number[] = [startId]
-
-  while (queue.length > 0 && visited.size < size) {
-    const id = queue.shift()!
-    for (const neighborId of state.pieces[id]!.neighbors) {
-      if (neighborId === null || visited.has(neighborId) || visited.size >= size) continue
-      visited.add(neighborId)
-      queue.push(neighborId)
-    }
-  }
-
-  return Array.from(visited)
-}
-
-// A standing debug aid, not a real gameplay mode: scatters everything normally, then pulls a small
-// patch of real, mutually adjacent pieces into a tight box in the top left corner, close enough to
-// reach without hunting through a full scatter of hundreds of pieces, but still not already touching,
-// so a real drag is still what proves the snap. See docs/status.md's Commands table for how to turn
-// this on from the real game.
-export function scatterWithTestCluster(state: PuzzleState, bounds: { w: number; h: number }, rng: Rng, clusterSize: number = 10): PlacementBounds {
-  const patch = connectedPatch(state, Math.min(clusterSize, state.pieceCount))
-
-  // Sized from the patch's own real frames, not from bounds/pieceCount: bounds is the widened scatter
-  // area (see scatterBounds), not the tight solved size a piece-count ratio would need to be accurate.
-  // Same SCATTER_DENSITY the main scatter targets, and scaled by patch.length rather than a fixed
-  // constant, so a bigger ?easyTest=N request gets a proportionally bigger box instead of the same one.
-  const patchSize = Math.max(...patch.map((id) => Math.max(state.pieces[id]!.frame.width, state.pieces[id]!.frame.height)))
-  const boxSize = patchSize * Math.sqrt(patch.length / SCATTER_DENSITY)
-
-  // The corner box has to be reserved before the general scatter runs, not carved out of it afterward.
-  // Placing every piece first and then overwriting just the patch's position (an earlier shape of this
-  // function) left the general scatter free to put an unrelated piece in that same corner, since nothing
-  // ever told it not to, two placement passes sharing one physical region with neither aware of the
-  // other. Found by the user after an earlier fix only addressed placement *within* the patch, not the
-  // patch against everyone else. See docs/journal.md.
-  //
-  // The fix: a full height strip of width boxSize on the left is reserved for the patch alone, the rest
-  // of the pieces are placed only in what remains, then shifted right so they never enter the strip.
-  const patchIds = new Set(patch)
-  const generalIds = Array.from({ length: state.pieceCount }, (_, i) => i).filter((id) => !patchIds.has(id))
-  const generalBounds = { w: Math.max(1, bounds.w - boxSize), h: bounds.h }
-
-  const generalUsed = placeInGrid(state, generalIds, generalBounds, rng)
-  for (const id of generalIds) state.x[id] = state.x[id]! + boxSize
-
-  const patchUsed = placeInGrid(state, patch, { w: boxSize, h: boxSize }, rng)
-
-  return {
-    w: boxSize + generalUsed.w,
-    h: Math.max(patchUsed.h, generalUsed.h),
-  }
 }
 
 // True once every piece has merged into one cluster, whatever id happens to be its root. The win

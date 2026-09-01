@@ -8,12 +8,11 @@ const entry = (file: string) => fileURLToPath(new URL(file, import.meta.url))
 export default defineConfig({
   build: {
     rollupOptions: {
-      // Three entry points, three independent module graphs.
+      // Two entry points, two independent module graphs.
       // The lab never imports the game, so a UI rewrite cannot break it. See docs/ROADMAP.md phase 1.
       input: {
         main: entry('index.html'),
         lab: entry('lab.html'),
-        stress: entry('stress.html')
       },
     },
   },

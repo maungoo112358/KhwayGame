@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { createPuzzleState, scatterBounds, scatterPieces, scatterWithTestCluster, isSolved } from './puzzle'
+import { createPuzzleState, scatterBounds, scatterPieces, isSolved } from './puzzle'
 import { createClusterIndex } from './unionFind'
 import { makeRng, type PuzzleBuild } from '../core'
 import { makeTestBuild } from './testFixtures'
@@ -147,80 +147,6 @@ describe('scatterPieces', () => {
     }
 
     expect(comparisons).toBeGreaterThan(4000)
-  })
-})
-
-describe('scatterWithTestCluster', () => {
-  it('places the requested patch within a small corner box', () => {
-    const build = makeTestBuild(5, 5, 50)
-    const state = createPuzzleState(build)
-    const bounds = { w: 1000, h: 1000 }
-    const rng = makeRng(1, 'scatter-test')
-
-    scatterWithTestCluster(state, bounds, rng, 10)
-
-    // Every piece in this fixture has the same 50px frame, matching how scatterWithTestCluster itself
-    // sizes the box: patchSize (50) times sqrt(patchLength / SCATTER_DENSITY (0.3)).
-    const boxSize = 50 * Math.sqrt(10 / 0.3)
-
-    // Piece 0's own neighbours in a 5 by 5 grid (row major id = row * 5 + col) are 1 (east) and 5
-    // (south), both real, both guaranteed to be in the patch by the breadth first walk.
-    for (const id of [0, 1, 5]) {
-      const piece = state.pieces[id]!
-      expect(state.x[id]).toBeGreaterThanOrEqual(0)
-      expect(state.y[id]).toBeGreaterThanOrEqual(0)
-      expect(state.x[id]! + piece.frame.width).toBeLessThanOrEqual(boxSize)
-      expect(state.y[id]! + piece.frame.height).toBeLessThanOrEqual(boxSize)
-    }
-  })
-
-  // The bug reported and found three times over. First the patch's own placement inside its box was
-  // pure uniform random. Fixed, then the patch's box turned out to still overlap whatever the general
-  // scatter separately, obliviously, also placed in that same corner, since nothing had reserved the
-  // space. Fixed, then the general scatter itself turned out to overlap real, variably sized pieces
-  // that a uniform grid cell was never sized to hold. Checks every pair in the whole puzzle, patch
-  // against patch and patch against everyone else, with varied piece sizes, all three bugs at once.
-  it('does not overlap any two pieces anywhere, patch included, varied piece sizes included', () => {
-    const build = withVariedFrameSizes(makeTestBuild(8, 8, 50), 50)
-    const state = createPuzzleState(build)
-    const bounds = scatterBounds({ w: 8 * 50, h: 8 * 50 })
-    const rng = makeRng(3, 'scatter-test')
-
-    scatterWithTestCluster(state, bounds, rng, 10)
-
-    let comparisons = 0
-    for (let i = 0; i < state.pieceCount; i++) {
-      for (let j = i + 1; j < state.pieceCount; j++) {
-        expect(overlaps(state, i, j), `piece ${i} vs piece ${j}`).toBe(false)
-        comparisons++
-      }
-    }
-    expect(comparisons).toBeGreaterThan(2000)
-  })
-
-  it('keeps every piece within the area it reports having used', () => {
-    const build = makeTestBuild(5, 5, 50)
-    const state = createPuzzleState(build)
-    const rng = makeRng(1, 'scatter-test')
-
-    const used = scatterWithTestCluster(state, { w: 1000, h: 1000 }, rng, 10)
-
-    for (let id = 0; id < state.pieceCount; id++) {
-      const piece = state.pieces[id]!
-      expect(state.x[id]).toBeGreaterThanOrEqual(0)
-      expect(state.y[id]).toBeGreaterThanOrEqual(0)
-      expect(state.x[id]! + piece.frame.width).toBeLessThanOrEqual(used.w)
-      expect(state.y[id]! + piece.frame.height).toBeLessThanOrEqual(used.h)
-    }
-  })
-
-  it('does not throw when asked for more pieces than the puzzle has', () => {
-    const build = makeTestBuild(3, 3, 100)
-    const state = createPuzzleState(build)
-    const bounds = { w: 500, h: 500 }
-    const rng = makeRng(1, 'scatter-test')
-
-    expect(() => scatterWithTestCluster(state, bounds, rng, 50)).not.toThrow()
   })
 })
 

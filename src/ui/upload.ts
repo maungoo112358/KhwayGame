@@ -8,7 +8,10 @@ export interface UploadZone {
   element: HTMLElement
 }
 
-export function createUploadZone(onImage: (image: ImageBitmap, file: File) => void): UploadZone {
+// onDemo lets the player skip uploading anything and try a small, real puzzle instead. Kept as a
+// second callback rather than folding it into onImage, the demo never goes through a real file or the
+// size picker, it is a different path from the start, not a different image on the same one.
+export function createUploadZone(onImage: (image: ImageBitmap, file: File) => void, onDemo: () => void): UploadZone {
   const container = document.createElement('div')
   container.id = 'upload-zone'
   container.style.cssText = `
@@ -21,7 +24,25 @@ export function createUploadZone(onImage: (image: ImageBitmap, file: File) => vo
     border: 2px dashed #C9BCA6; border-radius: 12px; padding: 48px 64px; text-align: center;
     background: #EDE6DA;
   `
-  box.textContent = 'Click or drop a photo to begin'
+
+  const prompt = document.createElement('div')
+  prompt.textContent = 'Click or drop a photo to begin'
+  box.append(prompt)
+
+  const demoButton = document.createElement('button')
+  demoButton.type = 'button'
+  demoButton.textContent = 'or try a 10 piece demo puzzle'
+  demoButton.style.cssText = `
+    display: block; margin: 16px auto 0; padding: 0; border: none; background: none;
+    color: #4A443C; text-decoration: underline; cursor: pointer; font: inherit;
+  `
+  // Stops the click bubbling to the container's own listener below, which would otherwise open the
+  // file picker at the same time as starting the demo.
+  demoButton.addEventListener('click', (event) => {
+    event.stopPropagation()
+    onDemo()
+  })
+  box.append(demoButton)
 
   const input = document.createElement('input')
   input.type = 'file'

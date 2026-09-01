@@ -11,7 +11,7 @@ module.exports = {
       comment:
         'core/ turns an image into a PuzzleBuild and knows nothing else. The UI is expected to be rewritten repeatedly, and core must survive every rewrite untouched. See D8.',
       from: { path: '^src/core' },
-      to: { path: '^src/(state|render|ui|lab|stress)' },
+      to: { path: '^src/(state|render|ui|lab)' },
     },
     {
       name: 'core-no-pixi',
@@ -35,14 +35,14 @@ module.exports = {
       comment:
         'Dependencies flow toward core. state/ may import core/, but never render/, ui/ or lab/.',
       from: { path: '^src/state' },
-      to: { path: '^src/(render|ui|lab|stress)' },
+      to: { path: '^src/(render|ui|lab)' },
     },
     {
       name: 'core-public-surface-only',
       severity: 'error',
       comment:
         'src/core/index.ts is the whole of core\'s public surface. Lattices, noise, warps and beziers are implementation detail, and replacing the warped grid with Voronoi later must not be visible from outside core. It cannot be if nobody outside can name those modules. See D2 and the PieceGeometryProvider seam in docs/ARCHITECTURE.md.',
-      from: { path: '^src/(state|render|ui|lab|worker|stress)' },
+      from: { path: '^src/(state|render|ui|lab|worker)' },
       to: { path: '^src/core/', pathNot: '^src/core/index[.]ts$' },
     },
     {
@@ -61,14 +61,6 @@ module.exports = {
       from: {},
       to: { circular: true },
     },
-    {
-      name: 'nothing-imports-stress',
-      severity: 'error',
-      comment:
-        'The stress view is a throwaway performance harness and a separate Vite entry point. Nothing may depend on it, the same way nothing may depend on the lab.',
-      from: { pathNot: '^src/stress' },
-      to: { path: '^src/stress' },
-    }
   ],
 
   options: {
