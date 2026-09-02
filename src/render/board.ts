@@ -4,7 +4,7 @@
 // this module only ever renders and interacts with whatever PuzzleState it is handed.
 
 import type { Application } from 'pixi.js'
-import { Container, ImageSource, Rectangle, Sprite, Texture } from 'pixi.js'
+import { Container, Graphics, ImageSource, Rectangle, Sprite, Texture } from 'pixi.js'
 import { bakePiece, type AssembledPiece, type PuzzleBuild } from '../core'
 import {
   applyCommand, buildSpatialHash, createClusterIndex, createCommandContext, findSnapTargets, pickAt,
@@ -13,8 +13,8 @@ import {
 
 const LOCAL_ACTOR = 0
 // Absolute scale, not a multiplier of some fit-to-table value: 1 is a piece's real baked size on
-// screen, regardless of how many pieces exist or how big the table is.
-const MIN_ZOOM = 0.1
+// screen, regardless of how many pieces exist or how big the table is. The zoom-out limit is the
+// opposite of this, deliberately not a fixed constant, see minZoomToFit below.
 const MAX_ZOOM = 5
 const INITIAL_ZOOM = 1
 const ZOOM_STEP = 1.15
@@ -165,13 +165,24 @@ export function createBoard(app: Application, host: HTMLElement, bake: PuzzleBui
   const canvas = app.canvas
   board.scale.set(scale)
 
+  // Starts the camera centered on the table itself, not pinned to its top-left corner. Pieces are
+  // placed centered within tableBounds (see centerPlacement in state/puzzle.ts), so a corner-pinned
+  // camera opened on empty table, every piece sat out of view in the middle of the table until the
+  // player happened to pan there.
+  const initialVisibleWidth = host.clientWidth / scale
+  const initialVisibleHeight = host.clientHeight / scale
+  board.position.set(
+    (initialVisibleWidth / 2 - tableBounds.w / 2) * scale,
+    (initialVisibleHeight / 2 - tableBounds.h / 2) * scale,
+  )
+
   // Keeps board.position honest for whatever the current scale is: never showing table edges past
   // tableBounds when there is more table than viewport, and centered, not pinned to the top-left
   // corner, when there is more viewport than table (zoomed out far enough that the whole table already
   // fits). The old version only ever pinned the top-left corner and let leftover space pile up on the
   // right/bottom, which is invisible while there is no leftover space, but once the whole table fits
-  // (easy to reach now that zoom goes out to 0.1 and every table is a generous fixed size) that leftover
-  // space is the entire slack, and pinning it to one corner reads as "snapped into the corner" on every
+  // (guaranteed reachable now, see minZoomToFit below) that leftover space is the entire slack, and
+  // pinning it to one corner reads as "snapped into the corner" on every
   // single move, since the valid range collapses to one point there. Shared by both the wheel handler
   // (zooming out can reach this state without any drag at all) and the pan-drag handler.
   function clampBoardPosition(): void {
@@ -189,6 +200,45 @@ export function createBoard(app: Application, host: HTMLElement, bake: PuzzleBui
   }
   clampBoardPosition()
 
+  // True once the whole table already fits in the viewport on both axes, the same condition
+  // clampBoardPosition centers on rather than clamps: at that point there is no slack left to pan
+  // through, board.position is pinned to dead center no matter where a drag tries to push it. Used to
+  // stop a pan from starting at all, rather than starting one that clamps back to the same spot on every
+  // move, which felt like a broken drag rather than an intentionally locked one.
+  function boardFullyVisible(): boolean {
+    const visibleWidth = host.clientWidth / board.scale.x
+    const visibleHeight = host.clientHeight / board.scale.y
+    return tableBounds.w <= visibleWidth && tableBounds.h <= visibleHeight
+  }
+
+  // The zoom-out limit: the scale at which tableBounds exactly fits the viewport on its tighter axis,
+  // the same "contain" fit a photo viewer uses, not a fixed constant like 0.1. A fixed floor is either
+  // too tight, leaving the table's far edge forever off screen with no way to pan there (the border was
+  // reported cut off at the bottom on a normal laptop window, this is that bug), or too loose, letting
+  // the player zoom out past the whole table into surrounding empty space. Recomputed from host's actual
+  // size on every call rather than cached, so it stays correct if the window is resized.
+  function minZoomToFit(): number {
+    return Math.min(host.clientWidth / tableBounds.w, host.clientHeight / tableBounds.h)
+  }
+
+  // A screen-space frame, a sibling of `board` on the stage rather than a child of it, so it never pans
+  // or scales with the content. It marks the edge of the viewport itself, not the edge of the table:
+  // those two only ever coincide on one axis (see minZoomToFit above, tableBounds and the window are
+  // almost never the same shape), so a table-edge border always left the other axis unmarked. This one
+  // sidesteps that entirely by not caring where the table is. Hidden until the player actually reaches
+  // the zoom-out limit, where it appears as the "this is as far out as it goes" signal, then hides again
+  // the moment they zoom back in.
+  const zoomLimitBorder = new Graphics()
+    .rect(0, 0, host.clientWidth, host.clientHeight)
+    .stroke({ width: 2, color: 0xFF0000, alignment: 1 })
+  zoomLimitBorder.visible = false
+  app.stage.addChild(zoomLimitBorder)
+
+  function updateZoomLimitBorder(): void {
+    zoomLimitBorder.visible = boardFullyVisible()
+  }
+  updateZoomLimitBorder()
+
   canvas.addEventListener(
     'wheel',
     (event) => {
@@ -201,11 +251,12 @@ export function createBoard(app: Application, host: HTMLElement, bake: PuzzleBui
       const contentY = (cursorY - board.position.y) / board.scale.y
 
       const factor = event.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP
-      scale = clamp(scale * factor, MIN_ZOOM, MAX_ZOOM)
+      scale = clamp(scale * factor, minZoomToFit(), MAX_ZOOM)
 
       board.position.set(cursorX - contentX * scale, cursorY - contentY * scale)
       board.scale.set(scale)
       clampBoardPosition()
+      updateZoomLimitBorder()
       commandCtx.snapDistance = baseSnapDistance / scale
     },
     { passive: false },
@@ -222,7 +273,7 @@ export function createBoard(app: Application, host: HTMLElement, bake: PuzzleBui
     const contentX = (clientX - bounds.left - board.position.x) / board.scale.x
     const contentY = (clientY - bounds.top - board.position.y) / board.scale.y
     const hovering = pickAt({ x: contentX, y: contentY }, spatialHash, state)
-    canvas.style.cursor = hovering ? 'default' : CURSOR_GRAB
+    canvas.style.cursor = hovering || boardFullyVisible() ? 'default' : CURSOR_GRAB
   }
 
   canvas.addEventListener('pointerdown', (event) => {
@@ -238,7 +289,7 @@ export function createBoard(app: Application, host: HTMLElement, bake: PuzzleBui
     if (picked) {
       draggingPiece = { pointerId: event.pointerId, pieceId: picked.id, x: event.clientX, y: event.clientY }
       applyCommand(commandCtx, { type: 'PickUp', pieceId: picked.id, actorId: LOCAL_ACTOR })
-    } else {
+    } else if (!boardFullyVisible()) {
       dragging = { pointerId: event.pointerId, x: event.clientX, y: event.clientY }
       canvas.style.cursor = CURSOR_GRABBING
     }

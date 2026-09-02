@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { createPuzzleState, scatterBounds, scatterPieces, isSolved } from './puzzle'
+import { createPuzzleState, scatterBounds, scatterPieces, centerPlacement, isSolved } from './puzzle'
 import { createClusterIndex } from './unionFind'
 import { makeRng, type PuzzleBuild } from '../core'
 import { makeTestBuild } from './testFixtures'
@@ -147,6 +147,41 @@ describe('scatterPieces', () => {
     }
 
     expect(comparisons).toBeGreaterThan(4000)
+  })
+})
+
+describe('centerPlacement', () => {
+  it('centers the used block within a bigger tableBounds', () => {
+    const build = makeTestBuild(4, 4, 50)
+    const state = createPuzzleState(build)
+    const rng = makeRng(1, 'scatter-test')
+
+    const used = scatterPieces(state, { w: 800, h: 600 }, rng)
+    const before = { x: Array.from(state.x), y: Array.from(state.y) }
+    const tableBounds = { w: used.w + 400, h: used.h + 200 }
+
+    centerPlacement(state, tableBounds, used)
+
+    const offsetX = (tableBounds.w - used.w) / 2
+    const offsetY = (tableBounds.h - used.h) / 2
+    for (let id = 0; id < state.pieceCount; id++) {
+      expect(state.x[id]).toBeCloseTo(before.x[id]! + offsetX)
+      expect(state.y[id]).toBeCloseTo(before.y[id]! + offsetY)
+    }
+  })
+
+  it('leaves positions unchanged when tableBounds equals the used area exactly', () => {
+    const build = makeTestBuild(4, 4, 50)
+    const state = createPuzzleState(build)
+    const rng = makeRng(1, 'scatter-test')
+
+    const used = scatterPieces(state, { w: 800, h: 600 }, rng)
+    const before = { x: Array.from(state.x), y: Array.from(state.y) }
+
+    centerPlacement(state, used, used)
+
+    expect(Array.from(state.x)).toEqual(before.x)
+    expect(Array.from(state.y)).toEqual(before.y)
   })
 })
 

@@ -144,6 +144,22 @@ export function scatterPieces(state: PuzzleState, bounds: { w: number; h: number
   return placeInGrid(state, allIds, bounds, rng)
 }
 
+// Shifts every piece so the shelf-packed block scatterPieces produced sits centered within tableBounds,
+// instead of pinned to the top-left corner where placeInGrid always starts. tableBounds is usually far
+// bigger than used, see the table sizing constants above, so a corner-pinned block leaves the player's
+// pieces stranded in one corner of a much larger table: zoom out past that block and zoom back in
+// anywhere else, and every piece is still up in that corner, off screen. Centering means any zoom-in
+// from the fully-zoomed-out view lands close to where the pieces actually are. tableBounds is always at
+// least as big as used on both axes (it is defined as the max of the two), so both offsets are >= 0.
+export function centerPlacement(state: PuzzleState, tableBounds: { w: number; h: number }, used: PlacementBounds): void {
+  const offsetX = (tableBounds.w - used.w) / 2
+  const offsetY = (tableBounds.h - used.h) / 2
+  for (let id = 0; id < state.pieceCount; id++) {
+    state.x[id] = state.x[id]! + offsetX
+    state.y[id] = state.y[id]! + offsetY
+  }
+}
+
 // True once every piece has merged into one cluster, whatever id happens to be its root. The win
 // condition: nothing here cares which piece that is, only that there is exactly one.
 export function isSolved(state: PuzzleState, clusters: { find(id: number): number }): boolean {

@@ -4,7 +4,7 @@ import { createPipeline } from './render/pipeline'
 import { createUploadZone } from './ui'
 import { createSizePicker } from './ui/sizePicker'
 import { chooseGrid, makeRng, workingSize, PUZZLE_BUILD_VERSION, type Grid } from './core'
-import { createPuzzleState, scatterBounds, scatterPieces } from './state'
+import { createPuzzleState, scatterBounds, scatterPieces, centerPlacement } from './state'
 
 const { app, backend } = await createApp(document.body)
 
@@ -92,6 +92,10 @@ async function startPuzzle(raw: ImageBitmap, targetPieces: number, initialGrid: 
   // return value mattered at all.
   const used = scatterPieces(state, target, makeRng(seed, 'scatter'))
   const tableBounds = { w: Math.max(target.w, used.w), h: Math.max(target.h, used.h) }
+  // Without this, the scattered block sits pinned to the table's top-left corner (see centerPlacement),
+  // stranded far from the center of the much bigger table, invisible again the moment the player zooms
+  // out past it and back in anywhere else.
+  centerPlacement(state, tableBounds, used)
 
   createBoard(app, document.body, bake, state, tableBounds, bakeSource)
 }

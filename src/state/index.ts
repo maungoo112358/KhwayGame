@@ -3,7 +3,7 @@
 //
 // It may import types from core/. It may not import render/, ui/ or lab/.
 
-export { createPuzzleState, scatterPieces, scatterBounds, isSolved } from './puzzle'
+export { createPuzzleState, scatterPieces, scatterBounds, centerPlacement, isSolved } from './puzzle'
 export type { PuzzleState, PlacementBounds } from './puzzle'
 
 export { createClusterIndex } from './unionFind'
