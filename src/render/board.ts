@@ -12,8 +12,11 @@ import {
 } from '../state'
 
 const LOCAL_ACTOR = 0
-const MIN_ZOOM = 1
-const MAX_ZOOM = 40
+// Absolute scale, not a multiplier of some fit-to-table value: 1 is a piece's real baked size on
+// screen, regardless of how many pieces exist or how big the table is.
+const MIN_ZOOM = 0.1
+const MAX_ZOOM = 5
+const INITIAL_ZOOM = 1
 const ZOOM_STEP = 1.15
 
 function clamp(value: number, low: number, high: number): number {
@@ -38,9 +41,14 @@ export function createBoard(app: Application, host: HTMLElement, bake: PuzzleBui
   let spatialHash: SpatialHash = buildSpatialHash(state, cellSize)
 
   const clusters: ClusterIndex = createClusterIndex(state.parent)
-  // A fraction of real piece size, not an arbitrary pixel count.
-  const snapDistance = cellSize * 0.3
-  const commandCtx: CommandContext = createCommandContext(state, clusters, snapDistance)
+  // A fraction of real piece size, not an arbitrary pixel count. This is the tolerance at real (1x)
+  // scale specifically, not a fixed content-space distance: state/ has no idea what zoom is, so the
+  // wheel handler below rescales commandCtx.snapDistance whenever scale changes, keeping the tolerance
+  // a constant number of screen pixels instead of a constant number of content pixels. Without this, the
+  // same content-space radius meant strict, fussy snapping zoomed out and overly generous snapping
+  // zoomed in, since a screen-pixel mouse movement covers more content the further out the camera is.
+  const baseSnapDistance = cellSize * 0.3
+  const commandCtx: CommandContext = createCommandContext(state, clusters, baseSnapDistance)
   const spritesById = new Map<number, Sprite>()
 
   function moveSprite(id: number): void {
@@ -49,10 +57,13 @@ export function createBoard(app: Application, host: HTMLElement, bake: PuzzleBui
     sprite.position.set(state.x[id]! - piece.anchor.x, state.y[id]! - piece.anchor.y)
   }
 
-  let zoom = MIN_ZOOM
+  // Fixed at a real, meaningful zoom on load, not fit-to-viewport: fitting the whole table into view
+  // made a piece's screen size depend on the table size, which depends on piece count, a small demo
+  // puzzle zoomed in past its real size and a large one zoomed out to near nothing. It also left no
+  // room to pan, since the fitted view already showed the entire table. See docs/status.md.
+  let scale = INITIAL_ZOOM
   const canvas = app.canvas
-  const fitScale = Math.min(host.clientWidth / tableBounds.w, host.clientHeight / tableBounds.h)
-  board.scale.set(fitScale)
+  board.scale.set(scale)
 
   canvas.addEventListener(
     'wheel',
@@ -66,12 +77,11 @@ export function createBoard(app: Application, host: HTMLElement, bake: PuzzleBui
       const contentY = (cursorY - board.position.y) / board.scale.y
 
       const factor = event.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP
-      const target = clamp(zoom * factor, MIN_ZOOM, MAX_ZOOM)
-      const newScale = fitScale * target
+      scale = clamp(scale * factor, MIN_ZOOM, MAX_ZOOM)
 
-      board.position.set(cursorX - contentX * newScale, cursorY - contentY * newScale)
-      board.scale.set(newScale)
-      zoom = target
+      board.position.set(cursorX - contentX * scale, cursorY - contentY * scale)
+      board.scale.set(scale)
+      commandCtx.snapDistance = baseSnapDistance / scale
     },
     { passive: false },
   )

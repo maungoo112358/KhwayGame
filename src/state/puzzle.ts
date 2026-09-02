@@ -40,9 +40,9 @@ export function createPuzzleState(build: PuzzleBuild): PuzzleState {
 // How much more room a scattered layout gets than the solved layout's own footprint. Solved pieces tile
 // edge to edge with zero gaps, so scattering into that exact same area, at any real piece count, reliably
 // crams pieces on top of each other, this is not a tuning nicety, it is the actual cause of a real bug
-// found by hand: a scattered board where most pieces sat hidden under other pieces. 30% target coverage
-// leaves visible gaps between pieces without making the table absurdly large to pan across.
-const SCATTER_DENSITY = 0.3
+// found by hand: a scattered board where most pieces sat hidden under other pieces. Area used is
+// 1 / SCATTER_DENSITY times the solved footprint, so 0.25 is a table 4 times the puzzle's own area.
+const SCATTER_DENSITY = 0.25
 
 // Expands a working (solved) size into a scatter area sized to hit SCATTER_DENSITY, uniformly on both
 // axes so the aspect ratio the board fits to screen against does not change.
