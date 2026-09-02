@@ -3,7 +3,7 @@
 // Pure data, no Pixi, no DOM. render/ subscribes and reflects, it never pokes these arrays directly,
 // only through the commands in commands.ts.
 
-import type { AssembledPiece, PuzzleBuild, Rng } from '../core'
+import { PIECE_COUNT_BANDS, TARGET_PIECE_SIZE, type AssembledPiece, type PuzzleBuild, type Rng } from '../core'
 
 export interface PuzzleState {
   readonly pieceCount: number
@@ -37,17 +37,31 @@ export function createPuzzleState(build: PuzzleBuild): PuzzleState {
   return { pieceCount, x, y, parent, heldBy, pieces: build.pieces }
 }
 
-// How much more room a scattered layout gets than the solved layout's own footprint. Solved pieces tile
-// edge to edge with zero gaps, so scattering into that exact same area, at any real piece count, reliably
-// crams pieces on top of each other, this is not a tuning nicety, it is the actual cause of a real bug
-// found by hand: a scattered board where most pieces sat hidden under other pieces. Area used is
-// 1 / SCATTER_DENSITY times the solved footprint, so 0.25 is a table 4 times the puzzle's own area.
-const SCATTER_DENSITY = 0.25
+// The table is sized once, from the biggest puzzle the game allows, never from whatever puzzle is
+// actually open. A table that grows and shrinks with piece count means a small puzzle gets a table too
+// cramped to have any real room to pan in, since the whole thing already fits on screen, see
+// docs/status.md. Deriving the reference from PIECE_COUNT_BANDS rather than a hardcoded piece count
+// means a future change to the bands (a bigger Large band, say) grows the table with it automatically,
+// nothing here needs to change by hand.
+const MAX_ALLOWED_PIECES = Math.max(...PIECE_COUNT_BANDS.map((band) => band.maxPieces))
 
-// Expands a working (solved) size into a scatter area sized to hit SCATTER_DENSITY, uniformly on both
-// axes so the aspect ratio the board fits to screen against does not change.
-export function scatterBounds(working: { w: number; h: number }, density: number = SCATTER_DENSITY): { w: number; h: number } {
-  const scale = Math.sqrt(1 / density)
+// A piece's baked footprint is TARGET_PIECE_SIZE on a side by construction, core/ingest.ts derives the
+// working resolution specifically to land there, so total working area at the biggest allowed puzzle is
+// approximately piece count times that, regardless of whatever aspect ratio the uploaded image actually
+// has. This is the reference the table is sized against, not any individual puzzle's own working area.
+const REFERENCE_WORKING_AREA = MAX_ALLOWED_PIECES * TARGET_PIECE_SIZE * TARGET_PIECE_SIZE
+
+// How many times the reference area (above) the table is. 10 means a table 10 times the area of the
+// biggest puzzle the game allows, not 10 times whatever puzzle is actually open, so the table's physical
+// size, and how much room there is to pan, stays the same across every piece count.
+const TABLE_AREA_MULTIPLIER = 10
+
+// Expands a working (solved) size into a scatter area sized to TABLE_AREA_MULTIPLIER times the reference
+// working area (both above), uniformly on both axes so the aspect ratio the board fits to screen against
+// does not change. Deliberately not sized off `working` itself, see the constants above for why the
+// table is the same physical size regardless of how many pieces this particular puzzle actually has.
+export function scatterBounds(working: { w: number; h: number }, referenceArea: number = REFERENCE_WORKING_AREA, multiplier: number = TABLE_AREA_MULTIPLIER): { w: number; h: number } {
+  const scale = Math.sqrt((referenceArea * multiplier) / (working.w * working.h))
   return { w: working.w * scale, h: working.h * scale }
 }
 

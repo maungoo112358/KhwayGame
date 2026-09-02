@@ -80,12 +80,18 @@ async function startPuzzle(raw: ImageBitmap, targetPieces: number, initialGrid: 
 
   const state = createPuzzleState(bake)
   // Wider than bake.working on purpose: the solved size has zero slack, solved pieces tile it edge to
-  // edge, so scattering into that exact area crams every piece on top of another. See scatterBounds.
-  // Only a starting target, not the real result: scatterPieces shelf-packs and reports back the area it
-  // actually used (PlacementBounds), which the camera has to be sized from, or panning would clip off
-  // pieces sitting outside a guess made before anything was placed.
+  // edge, so scattering into that exact area crams every piece on top of another. See scatterBounds,
+  // which also fixes this target to the same physical size regardless of piece count.
   const target = scatterBounds(bake.working)
-  const tableBounds = scatterPieces(state, target, makeRng(seed, 'scatter'))
+  // Not the real result on its own: scatterPieces shelf-packs and reports back only the area it
+  // actually used (PlacementBounds), which can be far smaller than target when there are few pieces,
+  // shelf packing stops as soon as everything fits, it does not spread out to fill the space on offer.
+  // The camera's pannable area is the larger of the two dimension by dimension: at least target, so a
+  // small puzzle still gets the same table everything else does, and at least used, or panning would
+  // clip off pieces sitting outside a guess made before anything was placed, the original reason this
+  // return value mattered at all.
+  const used = scatterPieces(state, target, makeRng(seed, 'scatter'))
+  const tableBounds = { w: Math.max(target.w, used.w), h: Math.max(target.h, used.h) }
 
   createBoard(app, document.body, bake, state, tableBounds, bakeSource)
 }
