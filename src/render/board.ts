@@ -24,38 +24,7 @@ const ZOOM_STEP = 1.15
 // than a filter, cheapest possible version to judge the idea with before spending more on it.
 const GLOW_TINT = 0xffdf9e
 
-// A custom pan cursor, not the OS default: the system 'grab'/'grabbing' glyph varies by platform and
-// theme, on this machine it renders as a flat white hand with no outline, unlike the arrow pointer next
-// to it, which does have one. Drawing our own, with the same dark-outline-light-fill look as a normal
-// pointer, keeps it legible and consistent regardless of OS theme. The keyword after the url() is a
-// fallback only, used if the data URI somehow fails to decode.
-function handCursor(svg: string, hotspotX: number, hotspotY: number, fallback: 'grab' | 'grabbing'): string {
-  return `url('data:image/svg+xml,${encodeURIComponent(svg)}') ${hotspotX} ${hotspotY}, ${fallback}`
-}
-
-const OPEN_HAND_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
-  <g fill="#fff" stroke="#000" stroke-width="1.3" stroke-linejoin="round">
-    <rect x="4.5" y="12.5" width="6.5" height="4.5" rx="2.2" transform="rotate(-30 7.75 14.75)"/>
-    <rect x="8" y="12" width="9.5" height="9.5" rx="3.2"/>
-    <rect x="8" y="4.2" width="2.6" height="9.3" rx="1.3"/>
-    <rect x="11.1" y="3" width="2.6" height="10.5" rx="1.3"/>
-    <rect x="14.2" y="4.2" width="2.6" height="9.3" rx="1.3"/>
-    <rect x="17.3" y="6.2" width="2.6" height="7.8" rx="1.3"/>
-  </g>
-</svg>`
-
-const CLOSED_FIST_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
-  <g fill="#fff" stroke="#000" stroke-width="1.3" stroke-linejoin="round">
-    <rect x="4" y="12.5" width="6" height="4.5" rx="2.2" transform="rotate(-20 7 14.75)"/>
-    <rect x="7" y="9" width="12.5" height="10.5" rx="4"/>
-    <rect x="9.5" y="9.5" width="2" height="3" rx="1"/>
-    <rect x="13" y="9.5" width="2" height="3" rx="1"/>
-    <rect x="16.5" y="9.5" width="2" height="3" rx="1"/>
-  </g>
-</svg>`
-
-const CURSOR_GRAB = handCursor(OPEN_HAND_SVG, 12, 12, 'grab')
-const CURSOR_GRABBING = handCursor(CLOSED_FIST_SVG, 12, 12, 'grabbing')
+const CURSOR_GRABBING = 'grabbing'
 
 function clamp(value: number, low: number, high: number): number {
   return Math.min(Math.max(value, low), high)
@@ -265,31 +234,25 @@ export function createBoard(app: Application, host: HTMLElement, bake: PuzzleBui
   let dragging: { pointerId: number; x: number; y: number } | null = null
   let draggingPiece: { pointerId: number; pieceId: number; x: number; y: number } | null = null
 
-  // 'grab' hints that empty space can be dragged to pan, same convention map apps use. 'default' over a
-  // piece, since that drags the piece itself, a different action, not the board. Only ever computed
-  // while nothing is currently being dragged, mid-drag the cursor is set directly to 'grabbing' instead.
-  function updateHoverCursor(clientX: number, clientY: number): void {
-    const bounds = canvas.getBoundingClientRect()
-    const contentX = (clientX - bounds.left - board.position.x) / board.scale.x
-    const contentY = (clientY - bounds.top - board.position.y) / board.scale.y
-    const hovering = pickAt({ x: contentX, y: contentY }, spatialHash, state)
-    canvas.style.cursor = hovering || boardFullyVisible() ? 'default' : CURSOR_GRAB
-  }
-
   canvas.addEventListener('pointerdown', (event) => {
-    const bounds = canvas.getBoundingClientRect()
-    const cursorX = event.clientX - bounds.left
-    const cursorY = event.clientY - bounds.top
-    const contentX = (cursorX - board.position.x) / board.scale.x
-    const contentY = (cursorY - board.position.y) / board.scale.y
-    const picked = pickAt({ x: contentX, y: contentY }, spatialHash, state)
+    // Button 1 is the middle button. It default-behaves as a browser autoscroll/paste trigger unless
+    // prevented, since this canvas gives it a real meaning (panning) instead.
+    if (event.button === 1) event.preventDefault()
 
     canvas.setPointerCapture(event.pointerId)
 
-    if (picked) {
-      draggingPiece = { pointerId: event.pointerId, pieceId: picked.id, x: event.clientX, y: event.clientY }
-      applyCommand(commandCtx, { type: 'PickUp', pieceId: picked.id, actorId: LOCAL_ACTOR })
-    } else if (!boardFullyVisible()) {
+    if (event.button === 0) {
+      const bounds = canvas.getBoundingClientRect()
+      const cursorX = event.clientX - bounds.left
+      const cursorY = event.clientY - bounds.top
+      const contentX = (cursorX - board.position.x) / board.scale.x
+      const contentY = (cursorY - board.position.y) / board.scale.y
+      const picked = pickAt({ x: contentX, y: contentY }, spatialHash, state)
+      if (picked) {
+        draggingPiece = { pointerId: event.pointerId, pieceId: picked.id, x: event.clientX, y: event.clientY }
+        applyCommand(commandCtx, { type: 'PickUp', pieceId: picked.id, actorId: LOCAL_ACTOR })
+      }
+    } else if (event.button === 1 && !boardFullyVisible()) {
       dragging = { pointerId: event.pointerId, x: event.clientX, y: event.clientY }
       canvas.style.cursor = CURSOR_GRABBING
     }
@@ -312,10 +275,7 @@ export function createBoard(app: Application, host: HTMLElement, bake: PuzzleBui
       return
     }
 
-    if (dragging === null || event.pointerId !== dragging.pointerId) {
-      updateHoverCursor(event.clientX, event.clientY)
-      return
-    }
+    if (dragging === null || event.pointerId !== dragging.pointerId) return
 
     board.position.x += event.clientX - dragging.x
     board.position.y += event.clientY - dragging.y
@@ -366,7 +326,7 @@ export function createBoard(app: Application, host: HTMLElement, bake: PuzzleBui
       }
       dragging = null
       draggingPiece = null
-      updateHoverCursor(event.clientX, event.clientY)
+      canvas.style.cursor = 'default'
     })
   }
 
