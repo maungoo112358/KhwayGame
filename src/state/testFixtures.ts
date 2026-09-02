@@ -38,6 +38,15 @@ export function makeTestBuild(cols: number, rows: number, cellSize: number): Puz
         isEdge: row === 0 || col === 0 || row === rows - 1 || col === cols - 1,
         dominantColor: 0,
         alphaMask: solidAlphaMask(cellSize, cellSize),
+        // A plain square, same corners solved/bbox already describe, no tabs: enough for
+        // render/board.ts's rim-punch tests to have a real outline to erase against.
+        bbox: { x: col * cellSize, y: row * cellSize, width: cellSize, height: cellSize },
+        path: [
+          { x: col * cellSize, y: row * cellSize },
+          { x: (col + 1) * cellSize, y: row * cellSize },
+          { x: (col + 1) * cellSize, y: (row + 1) * cellSize },
+          { x: col * cellSize, y: (row + 1) * cellSize },
+        ],
       })
     }
   }

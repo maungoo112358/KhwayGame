@@ -47,16 +47,22 @@ export function createCommandContext(state: PuzzleState, clusters: ClusterIndex,
   return { state, clusters, snapDistance, actorAnchor: new Map() }
 }
 
-export function applyCommand(ctx: CommandContext, command: Command): void {
+// Returns the Merge that actually happened, if any, so a caller that cares (render/board.ts, to redraw
+// the two pieces involved without the rim between them) can react to it without state/ knowing anything
+// about rendering. Only 'Move' can ever produce one, the others always report null.
+export function applyCommand(ctx: CommandContext, command: Command): Merge | null {
   switch (command.type) {
     case 'PickUp':
-      return applyPickUp(ctx, command)
+      applyPickUp(ctx, command)
+      return null
     case 'Move':
       return applyMove(ctx, command)
     case 'Drop':
-      return applyDrop(ctx, command)
+      applyDrop(ctx, command)
+      return null
     case 'Merge':
-      return applyMerge(ctx, command)
+      applyMerge(ctx, command)
+      return null
   }
 }
 
@@ -67,16 +73,16 @@ function applyPickUp(ctx: CommandContext, command: PickUp): void {
   }
 }
 
-function applyMove(ctx: CommandContext, command: Move): void {
+function applyMove(ctx: CommandContext, command: Move): Merge | null {
   const anchor = ctx.actorAnchor.get(command.actorId)
-  if (anchor === undefined) return
+  if (anchor === undefined) return null
 
   for (const id of ctx.clusters.membersOf(anchor)) {
     ctx.state.x[id] = ctx.state.x[id]! + command.dx
     ctx.state.y[id] = ctx.state.y[id]! + command.dy
   }
 
-  trySnap(ctx, anchor)
+  return trySnap(ctx, anchor)
 }
 
 function applyDrop(ctx: CommandContext, command: Drop): void {
@@ -93,7 +99,7 @@ function applyDrop(ctx: CommandContext, command: Drop): void {
 // internal offsets never drift, every move applies the same delta to every member, so correcting only the
 // anchor's own existing cluster against a neighbour is enough, the neighbour's cluster is already
 // internally consistent. Carried over from src/stress/main.ts's trySnap, generalised to PuzzleState.
-function trySnap(ctx: CommandContext, pieceId: number): void {
+function trySnap(ctx: CommandContext, pieceId: number): Merge | null {
   const { state, clusters, snapDistance } = ctx
   const piece = state.pieces[pieceId]!
 
@@ -110,9 +116,12 @@ function trySnap(ctx: CommandContext, pieceId: number): void {
 
     if (Math.hypot(target.x - current.x, target.y - current.y) > snapDistance) continue
 
-    applyMerge(ctx, { type: 'Merge', a: pieceId, b: neighborId }, target)
-    return
+    const merge: Merge = { type: 'Merge', a: pieceId, b: neighborId }
+    applyMerge(ctx, merge, target)
+    return merge
   }
+
+  return null
 }
 
 // The position correction and the union both belong to one merge: correcting first, then unioning, is

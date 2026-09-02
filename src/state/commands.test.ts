@@ -77,12 +77,15 @@ describe('snapping on move', () => {
     state.y[1] = 0
 
     applyCommand(ctx, { type: 'PickUp', pieceId: 1, actorId: 1 })
-    applyCommand(ctx, { type: 'Move', actorId: 1, dx: 0, dy: 0 })
+    const merge = applyCommand(ctx, { type: 'Move', actorId: 1, dx: 0, dy: 0 })
 
     expect(clusters.find(1)).toBe(clusters.find(2))
     // Snapping corrects position to the exact rigid offset, not just close.
     expect(state.x[1]).toBeCloseTo(100)
     expect(state.y[1]).toBeCloseTo(0)
+    // render/board.ts rebakes exactly these two pieces off this return value, so the ids matter, not
+    // just that something merged.
+    expect(merge).toEqual({ type: 'Merge', a: 1, b: 2 })
   })
 
   it('does not merge a real neighbour still outside snap distance', () => {
@@ -91,9 +94,10 @@ describe('snapping on move', () => {
     state.y[1] = 0
 
     applyCommand(ctx, { type: 'PickUp', pieceId: 1, actorId: 1 })
-    applyCommand(ctx, { type: 'Move', actorId: 1, dx: 0, dy: 0 })
+    const merge = applyCommand(ctx, { type: 'Move', actorId: 1, dx: 0, dy: 0 })
 
     expect(clusters.find(0)).not.toBe(clusters.find(1))
+    expect(merge).toBeNull()
   })
 
   it('never merges two pieces that are not real grid neighbours, however close', () => {

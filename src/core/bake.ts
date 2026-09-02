@@ -58,7 +58,10 @@ function outlinePath(points: Point[]): Path2D {
   return path;
 }
 
-export function bakePiece(piece: PieceGeometry, image: ImageBitmap, options: CardboardOptions = {}, ): ImageBitmap {
+// Pieces whose shared edge with `piece` should not show `piece`'s own rim, because they are already
+// connected. Only ever the pieces actually joined right now, not every grid neighbour, a loose piece
+// still wants its full rim on every side.
+export function bakePiece(piece: PieceGeometry, image: ImageBitmap, options: CardboardOptions = {}, connectedNeighbors: readonly PieceGeometry[] = [], ): ImageBitmap {
   const rimColorLight = options.rimColorLight ?? DEFAULT_RIM_COLOR_LIGHT;
   const rimColorDark = options.rimColorDark ?? DEFAULT_RIM_COLOR_DARK;
   const rimOffset = options.rimOffset ?? DEFAULT_RIM_OFFSET;
@@ -88,6 +91,21 @@ export function bakePiece(piece: PieceGeometry, image: ImageBitmap, options: Car
   ctx.fillStyle = rimGradient;
   ctx.fill(outline);
   ctx.restore();
+
+  // A connected neighbour's own outline erases whatever rim just got painted underneath it: once two
+  // pieces are actually joined, the raw board colour peeking out past the tab is what reads as a "gap"
+  // at the seam, real cardboard flush against another piece does not show its own edge there. Erasing
+  // with the neighbour's true, unshifted outline (not this piece's) is what makes the cut visually
+  // reappear as one continuous surface rather than the rim's sliver. destination-out removes whatever is
+  // already drawn wherever this fill has alpha, it does not care what colour the fill itself is.
+  if (connectedNeighbors.length > 0) {
+    ctx.save();
+    ctx.globalCompositeOperation = 'destination-out';
+    for (const neighbor of connectedNeighbors) {
+      ctx.fill(outlinePath(neighbor.path));
+    }
+    ctx.restore();
+  }
 
   // Layer 2: the top face. Same clip-then-drawImage the lab's naive drawPiece already does, just with
   // the treated image rather than raw pixels.

@@ -47,6 +47,14 @@ export interface AssembledPiece {
   isEdge: boolean
   dominantColor: number
   alphaMask: AlphaMask
+  // The piece's own cut outline and its bbox, in image pixels, same shape bakePiece itself consumes.
+  // Kept on the contract (rather than discarded once baked, which is all this struct needed until now)
+  // specifically so a piece can be baked again later, e.g. to punch a neighbour's shape out of the rim
+  // once the two are actually connected, see render/board.ts. A deliberate contract growth, not a leak:
+  // AssembledPiece already carries everything else PieceGeometry does, this just stops throwing the
+  // remaining two fields away.
+  path: Point[]
+  bbox: Bounds
 }
 
 export interface PuzzleBuild {
@@ -121,7 +129,9 @@ export function assembleAtlases(pieces: PieceGeometry[], image: ImageBitmap, gri
       neighbors: entry.piece.neighbors,
       isEdge: entry.isEdge,
       dominantColor: entry.dominantColor,
-      alphaMask: entry.alphaMask
+      alphaMask: entry.alphaMask,
+      path: entry.piece.path,
+      bbox: entry.piece.bbox,
     })
   }
 

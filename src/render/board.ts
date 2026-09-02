@@ -5,7 +5,7 @@
 
 import type { Application } from 'pixi.js'
 import { Container, ImageSource, Rectangle, Sprite, Texture } from 'pixi.js'
-import type { PuzzleBuild } from '../core'
+import { bakePiece, type AssembledPiece, type PuzzleBuild } from '../core'
 import {
   applyCommand, buildSpatialHash, createClusterIndex, createCommandContext, pickAt,
   type ClusterIndex, type CommandContext, type PuzzleState, type SpatialHash,
@@ -32,7 +32,9 @@ export interface Board {
 // pieces tile it edge to edge), scattering into that exact area is what crammed pieces on top of each
 // other, see state/puzzle.ts's scatterBounds. The camera has to agree with whatever area scattering
 // actually used, or panning would clip off pieces sitting outside bake.working's own footprint.
-export function createBoard(app: Application, host: HTMLElement, bake: PuzzleBuild, state: PuzzleState, tableBounds: { w: number; h: number }): Board {
+// treatedImage is the same photo the atlases were baked from, kept alive by the caller specifically so
+// a piece can be baked again on demand, see rebakeConnected below.
+export function createBoard(app: Application, host: HTMLElement, bake: PuzzleBuild, state: PuzzleState, tableBounds: { w: number; h: number }, treatedImage: ImageBitmap): Board {
   const sources = bake.atlases.map((atlas) => new ImageSource({ resource: atlas }))
   const board = new Container()
 
@@ -55,6 +57,47 @@ export function createBoard(app: Application, host: HTMLElement, bake: PuzzleBui
     const sprite = spritesById.get(id)!
     const piece = state.pieces[id]!
     sprite.position.set(state.x[id]! - piece.anchor.x, state.y[id]! - piece.anchor.y)
+  }
+
+  // Re-bakes one piece with the rim punched out wherever a real, currently connected neighbour covers
+  // it, then swaps the sprite over to that fresh bitmap. AssembledPiece already carries every field
+  // bakePiece's PieceGeometry parameter needs (id, col, row, path, bbox, solved, neighbors), so no
+  // conversion is needed, state.pieces[id] is passed straight through. Cheap enough to run inline on the
+  // pointer thread: a single piece bakes in a fraction of a millisecond, see docs/status.md's 3.6 numbers
+  // (972 pieces in 681ms). The re-baked piece stops sharing the shared atlas sheet in exchange, one extra
+  // draw call per piece that has ever connected to something, not a real cost at real puzzle scale.
+  function rebakeConnected(id: number): void {
+    const piece = state.pieces[id]!
+    const connected: AssembledPiece[] = []
+    for (const neighborId of piece.neighbors) {
+      if (neighborId === null) continue
+      if (clusters.find(id) !== clusters.find(neighborId)) continue
+      connected.push(state.pieces[neighborId]!)
+    }
+
+    const bitmap = bakePiece(piece, treatedImage, undefined, connected)
+    spritesById.get(id)!.texture = new Texture({ source: new ImageSource({ resource: bitmap }) })
+  }
+
+  // A single Move can merge two whole clusters, not just the two pieces the player's cursor was
+  // literally holding, dragging one piece drags everything already welded to it. Only rebaking
+  // merge.a/merge.b missed every other seam that became connected purely as a side effect of the two
+  // groups joining, which is exactly the leftover rim reported after solving a real puzzle: the seam
+  // that showed it was never the piece anyone actually dragged, just a neighbour of it on the other
+  // side of the merge. preDragMembers is a snapshot of the dragged piece's cluster taken before this
+  // move, so pieces that came from "the other side" of the merge can be told apart from ones that were
+  // already together, without state/ needing to know rendering exists.
+  function rebakeAcrossMerge(preDragMembers: ReadonlySet<number>, merge: { a: number; b: number }): void {
+    const allMembers = clusters.membersOf(merge.a)
+    for (const id of allMembers) {
+      const wasOnDraggedSide = preDragMembers.has(id)
+      const piece = state.pieces[id]!
+      const gainedConnection = piece.neighbors.some((neighborId) => {
+        if (neighborId === null || !allMembers.has(neighborId)) return false
+        return preDragMembers.has(neighborId) !== wasOnDraggedSide
+      })
+      if (gainedConnection) rebakeConnected(id)
+    }
   }
 
   // Fixed at a real, meaningful zoom on load, not fit-to-viewport: fitting the whole table into view
@@ -112,8 +155,14 @@ export function createBoard(app: Application, host: HTMLElement, bake: PuzzleBui
       const deltaX = (event.clientX - draggingPiece.x) / board.scale.x
       const deltaY = (event.clientY - draggingPiece.y) / board.scale.y
 
-      applyCommand(commandCtx, { type: 'Move', actorId: LOCAL_ACTOR, dx: deltaX, dy: deltaY })
+      // Copied, not just referenced: ClusterIndex.membersOf hands back its live internal Set, and a
+      // union that absorbs the dragged piece's own cluster into the bigger side would mutate this
+      // "before" snapshot in place if it were not copied, corrupting the very comparison it exists for.
+      const preDragMembers = new Set(clusters.membersOf(draggingPiece.pieceId))
+
+      const merge = applyCommand(commandCtx, { type: 'Move', actorId: LOCAL_ACTOR, dx: deltaX, dy: deltaY })
       for (const memberId of clusters.membersOf(draggingPiece.pieceId)) moveSprite(memberId)
+      if (merge !== null) rebakeAcrossMerge(preDragMembers, merge)
 
       draggingPiece = { ...draggingPiece, x: event.clientX, y: event.clientY }
       return
