@@ -7,7 +7,7 @@ import type { Application } from 'pixi.js'
 import { Container, Graphics, ImageSource, Rectangle, Sprite, Texture } from 'pixi.js'
 import { bakePiece, type AssembledPiece, type PuzzleBuild } from '../core'
 import {
-  applyCommand, buildSpatialHash, createClusterIndex, createCommandContext, findSnapTargets, pickAt,
+  applyCommand, buildSpatialHash, createClusterIndex, createCommandContext, findSnapTargets, isSolved, pickAt,
   type ClusterIndex, type CommandContext, type PuzzleState, type SpatialHash,
 } from '../state'
 
@@ -41,7 +41,7 @@ export interface Board {
 // actually used, or panning would clip off pieces sitting outside bake.working's own footprint.
 // treatedImage is the same photo the atlases were baked from, kept alive by the caller specifically so
 // a piece can be baked again on demand, see rebakeConnected below.
-export function createBoard(app: Application, host: HTMLElement, bake: PuzzleBuild, state: PuzzleState, tableBounds: { w: number; h: number }, treatedImage: ImageBitmap): Board {
+export function createBoard(app: Application, host: HTMLElement, bake: PuzzleBuild, state: PuzzleState, tableBounds: { w: number; h: number }, treatedImage: ImageBitmap, onSolved?: () => void): Board {
   const sources = bake.atlases.map((atlas) => new ImageSource({ resource: atlas }))
   const board = new Container()
 
@@ -317,6 +317,11 @@ export function createBoard(app: Application, host: HTMLElement, bake: PuzzleBui
           // it, looking like nothing snapped at all.
           for (const memberId of clusters.membersOf(draggingPiece.pieceId)) moveSprite(memberId)
           rebakeAcrossMerge(preDragMembers, draggingPiece.pieceId)
+
+          // isSolved can only newly become true right after a merge, nothing else changes cluster
+          // membership. Checked here rather than every frame, once per merge is the only time it can
+          // possibly flip.
+          if (isSolved(state, clusters)) onSolved?.()
         }
         setGlow(new Set())
 

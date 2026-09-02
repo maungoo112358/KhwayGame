@@ -3,6 +3,7 @@ import { createBoard } from './render/board'
 import { createPipeline } from './render/pipeline'
 import { createUploadZone } from './ui'
 import { createSizePicker } from './ui/sizePicker'
+import { createWinScreen } from './ui/winScreen'
 import { chooseGrid, makeRng, workingSize, PUZZLE_BUILD_VERSION, type Grid } from './core'
 import { createPuzzleState, scatterBounds, scatterPieces, centerPlacement } from './state'
 
@@ -97,7 +98,10 @@ async function startPuzzle(raw: ImageBitmap, targetPieces: number, initialGrid: 
   // out past it and back in anywhere else.
   centerPlacement(state, tableBounds, used)
 
-  createBoard(app, document.body, bake, state, tableBounds, bakeSource)
+  createBoard(app, document.body, bake, state, tableBounds, bakeSource, () => {
+    const winScreen = createWinScreen(() => winScreen.element.remove())
+    document.body.appendChild(winScreen.element)
+  })
 }
 
 const upload = createUploadZone(
