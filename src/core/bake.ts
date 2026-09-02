@@ -81,8 +81,13 @@ export function bakePiece(piece: PieceGeometry, image: ImageBitmap, options: Car
 
   // Layer 1: the rim. Filled first so the face drawn next covers most of it, offset down and right so a
   // sliver keeps showing on exactly those two sides, never the top or left. The gradient runs corner to
-  // corner of the piece's own box, so it is lighter on the side facing the light regardless of shape.
-  const rimGradient = ctx.createLinearGradient( box.x, box.y, box.x + box.width, box.y + box.height, );
+  // corner of the whole photo, not this piece's own small box: every piece is a window onto one shared
+  // light field, at the same absolute image coordinates the translate above already put this canvas in
+  // terms of, so two neighbouring pieces sample the same continuous gradient at the seam between them
+  // instead of each restarting light-to-dark from its own corner. Using the piece's own box here was
+  // the earlier version, and it read as a patchwork of separately lit pieces rather than one photo lit
+  // from a single direction, worst along the puzzle's outer border where every piece still shows a rim.
+  const rimGradient = ctx.createLinearGradient(0, 0, image.width, image.height);
   rimGradient.addColorStop(0, rimColorLight);
   rimGradient.addColorStop(1, rimColorDark);
 
