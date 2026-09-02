@@ -7,7 +7,7 @@ import type { Application } from 'pixi.js'
 import { Container, ImageSource, Rectangle, Sprite, Texture } from 'pixi.js'
 import { bakePiece, type AssembledPiece, type PuzzleBuild } from '../core'
 import {
-  applyCommand, buildSpatialHash, createClusterIndex, createCommandContext, pickAt,
+  applyCommand, buildSpatialHash, createClusterIndex, createCommandContext, findSnapTargets, pickAt,
   type ClusterIndex, type CommandContext, type PuzzleState, type SpatialHash,
 } from '../state'
 
@@ -18,6 +18,11 @@ const MIN_ZOOM = 0.1
 const MAX_ZOOM = 5
 const INITIAL_ZOOM = 1
 const ZOOM_STEP = 1.15
+// Experimental: a warm highlight on whichever piece the one being dragged would connect to if released
+// right now. Snapping itself only happens on drop (see state/commands.ts), so without some hint the
+// player has no idea a release is about to do anything until it already has. Plain Sprite.tint rather
+// than a filter, cheapest possible version to judge the idea with before spending more on it.
+const GLOW_TINT = 0xffdf9e
 
 function clamp(value: number, low: number, high: number): number {
   return Math.min(Math.max(value, low), high)
@@ -59,6 +64,21 @@ export function createBoard(app: Application, host: HTMLElement, bake: PuzzleBui
     sprite.position.set(state.x[id]! - piece.anchor.x, state.y[id]! - piece.anchor.y)
   }
 
+  // Every piece the currently dragged piece would connect to on release glows at once, not just one: a
+  // piece dropped into a gap between two or more already-placed neighbours should show all of them lit,
+  // the same set trySnap itself would merge with. Diffed against the previous set so a piece already
+  // glowing does not flicker its tint every tick, only pieces actually entering or leaving the set change.
+  let glowingIds: ReadonlySet<number> = new Set()
+  function setGlow(ids: ReadonlySet<number>): void {
+    for (const id of glowingIds) {
+      if (!ids.has(id)) spritesById.get(id)!.tint = 0xffffff
+    }
+    for (const id of ids) {
+      if (!glowingIds.has(id)) spritesById.get(id)!.tint = GLOW_TINT
+    }
+    glowingIds = ids
+  }
+
   // Re-bakes one piece with the rim punched out wherever a real, currently connected neighbour covers
   // it, then swaps the sprite over to that fresh bitmap. AssembledPiece already carries every field
   // bakePiece's PieceGeometry parameter needs (id, col, row, path, bbox, solved, neighbors), so no
@@ -79,16 +99,20 @@ export function createBoard(app: Application, host: HTMLElement, bake: PuzzleBui
     spritesById.get(id)!.texture = new Texture({ source: new ImageSource({ resource: bitmap }) })
   }
 
-  // A single Move can merge two whole clusters, not just the two pieces the player's cursor was
-  // literally holding, dragging one piece drags everything already welded to it. Only rebaking
-  // merge.a/merge.b missed every other seam that became connected purely as a side effect of the two
-  // groups joining, which is exactly the leftover rim reported after solving a real puzzle: the seam
-  // that showed it was never the piece anyone actually dragged, just a neighbour of it on the other
-  // side of the merge. preDragMembers is a snapshot of the dragged piece's cluster taken before this
-  // move, so pieces that came from "the other side" of the merge can be told apart from ones that were
-  // already together, without state/ needing to know rendering exists.
-  function rebakeAcrossMerge(preDragMembers: ReadonlySet<number>, merge: { a: number; b: number }): void {
-    const allMembers = clusters.membersOf(merge.a)
+  // A single Drop can merge two, three, or more whole clusters at once (see state/commands.ts's
+  // trySnap), not just the pieces the player's cursor was literally holding, dragging one piece drags
+  // everything already welded to it, and it can now connect to every matching neighbour at once. Only
+  // rebaking the pieces named in each Merge missed every other seam that became connected purely as a
+  // side effect of clusters joining, which is exactly the leftover rim reported after solving a real
+  // puzzle: the seam that showed it was never a piece anyone actually dragged, just a neighbour of it on
+  // the other side of a merge. anchorId is any piece already known to be in the final, fully merged
+  // cluster (the dragged piece itself always qualifies, whether or not anything merged), so looking up
+  // its membership once gets every side of every merge this drop produced in one pass, not one call per
+  // Merge. preDragMembers is a snapshot of the dragged piece's cluster taken before this drop, so pieces
+  // that came from "the other side" of any of those merges can be told apart from ones that were already
+  // together, without state/ needing to know rendering exists.
+  function rebakeAcrossMerge(preDragMembers: ReadonlySet<number>, anchorId: number): void {
+    const allMembers = clusters.membersOf(anchorId)
     for (const id of allMembers) {
       const wasOnDraggedSide = preDragMembers.has(id)
       const piece = state.pieces[id]!
@@ -155,14 +179,13 @@ export function createBoard(app: Application, host: HTMLElement, bake: PuzzleBui
       const deltaX = (event.clientX - draggingPiece.x) / board.scale.x
       const deltaY = (event.clientY - draggingPiece.y) / board.scale.y
 
-      // Copied, not just referenced: ClusterIndex.membersOf hands back its live internal Set, and a
-      // union that absorbs the dragged piece's own cluster into the bigger side would mutate this
-      // "before" snapshot in place if it were not copied, corrupting the very comparison it exists for.
-      const preDragMembers = new Set(clusters.membersOf(draggingPiece.pieceId))
-
-      const merge = applyCommand(commandCtx, { type: 'Move', actorId: LOCAL_ACTOR, dx: deltaX, dy: deltaY })
+      applyCommand(commandCtx, { type: 'Move', actorId: LOCAL_ACTOR, dx: deltaX, dy: deltaY })
       for (const memberId of clusters.membersOf(draggingPiece.pieceId)) moveSprite(memberId)
-      if (merge !== null) rebakeAcrossMerge(preDragMembers, merge)
+
+      // Preview only, applies nothing: snapping itself is checked once on drop, not here. This is what
+      // lights up every piece a release would connect to right now, without connecting anything early.
+      const previews = findSnapTargets(commandCtx, draggingPiece.pieceId)
+      setGlow(new Set(previews.map((preview) => preview.neighborId)))
 
       draggingPiece = { ...draggingPiece, x: event.clientX, y: event.clientY }
       return
@@ -182,12 +205,45 @@ export function createBoard(app: Application, host: HTMLElement, bake: PuzzleBui
     dragging = { pointerId: event.pointerId, x: event.clientX, y: event.clientY }
   })
 
-  for (const type of ['pointerup', 'pointercancel']) {
-    canvas.addEventListener(type, () => {
-      // Positions moved during a piece drag, the hash built at scatter time (or last drop) is stale
-      // for whatever just moved. Rebuilding once here is cheap next to patching every cell every frame.
+  const pointerEndEvents: Array<'pointerup' | 'pointercancel'> = ['pointerup', 'pointercancel']
+  for (const type of pointerEndEvents) {
+    canvas.addEventListener(type, (event) => {
       if (draggingPiece !== null) {
-        applyCommand(commandCtx, { type: 'Drop', actorId: LOCAL_ACTOR })
+        // pointerup is not guaranteed to be preceded by a pointermove at the same coordinates, a
+        // browser is free to throttle pointermove to its own render cadence while pointerup fires
+        // immediately, so the piece's logical position could still lag a little behind wherever it was
+        // actually released. Left alone, that gap was exactly wide enough to miss a snap the player had
+        // just seen glowing: the drop found nothing close enough, only a small nudge afterward did. One
+        // final Move to this event's own coordinates closes that gap before anything checks distance.
+        const finalDeltaX = (event.clientX - draggingPiece.x) / board.scale.x
+        const finalDeltaY = (event.clientY - draggingPiece.y) / board.scale.y
+        if (finalDeltaX !== 0 || finalDeltaY !== 0) {
+          applyCommand(commandCtx, { type: 'Move', actorId: LOCAL_ACTOR, dx: finalDeltaX, dy: finalDeltaY })
+          for (const memberId of clusters.membersOf(draggingPiece.pieceId)) moveSprite(memberId)
+        }
+
+        // Copied, not just referenced: ClusterIndex.membersOf hands back its live internal Set, and a
+        // union that absorbs the dragged piece's own cluster into the bigger side would mutate this
+        // "before" snapshot in place if it were not copied, corrupting the very comparison it exists
+        // for. Taken before Drop, since that is the one command that can now actually merge something.
+        const preDragMembers = new Set(clusters.membersOf(draggingPiece.pieceId))
+
+        const merges = applyCommand(commandCtx, { type: 'Drop', actorId: LOCAL_ACTOR })
+        if (merges.length > 0) {
+          // trySnap's own position correction (inside applyMerge) moves every member of the dragged
+          // cluster to align exactly with whatever it just merged into, real snapping, not just "close
+          // enough". That changes state.x/y, but nothing had told the sprites to catch up to it: the
+          // only moveSprite call in this handler runs before Drop, for the raw pointer delta, not after
+          // it for whatever Drop itself corrected. Without this, a merge could succeed completely,
+          // cluster union and all, while every sprite kept rendering wherever the mouse physically left
+          // it, looking like nothing snapped at all.
+          for (const memberId of clusters.membersOf(draggingPiece.pieceId)) moveSprite(memberId)
+          rebakeAcrossMerge(preDragMembers, draggingPiece.pieceId)
+        }
+        setGlow(new Set())
+
+        // Positions moved during a piece drag, the hash built at scatter time (or last drop) is stale
+        // for whatever just moved. Rebuilding once here is cheap next to patching every cell every frame.
         spatialHash = buildSpatialHash(state, cellSize)
       }
       dragging = null

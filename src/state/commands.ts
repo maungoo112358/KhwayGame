@@ -47,22 +47,28 @@ export function createCommandContext(state: PuzzleState, clusters: ClusterIndex,
   return { state, clusters, snapDistance, actorAnchor: new Map() }
 }
 
-// Returns the Merge that actually happened, if any, so a caller that cares (render/board.ts, to redraw
-// the two pieces involved without the rim between them) can react to it without state/ knowing anything
-// about rendering. Only 'Move' can ever produce one, the others always report null.
-export function applyCommand(ctx: CommandContext, command: Command): Merge | null {
+// Returns every Merge that actually happened, if any, so a caller that cares (render/board.ts, to
+// redraw the pieces involved without the rim between them) can react without state/ knowing anything
+// about rendering. Only 'Drop' can ever produce any, the others always report none. Snapping used to be
+// checked on every 'Move', which meant merely passing near a matching piece on the way somewhere else
+// would connect it, an unwanted "magnet" feel with no player intent behind it. Checking only on release
+// is what a real piece does too, nothing pulls at your hand mid-air, it only locks in once set down.
+// It can report more than one: a piece dropped into a gap surrounded by several already-placed
+// neighbours connects to all of them at once, the way setting a real piece into a hole does, not just
+// whichever neighbour happened to be checked first.
+export function applyCommand(ctx: CommandContext, command: Command): Merge[] {
   switch (command.type) {
     case 'PickUp':
       applyPickUp(ctx, command)
-      return null
+      return []
     case 'Move':
-      return applyMove(ctx, command)
+      applyMove(ctx, command)
+      return []
     case 'Drop':
-      applyDrop(ctx, command)
-      return null
+      return applyDrop(ctx, command)
     case 'Merge':
       applyMerge(ctx, command)
-      return null
+      return [command]
   }
 }
 
@@ -73,35 +79,77 @@ function applyPickUp(ctx: CommandContext, command: PickUp): void {
   }
 }
 
-function applyMove(ctx: CommandContext, command: Move): Merge | null {
+function applyMove(ctx: CommandContext, command: Move): void {
   const anchor = ctx.actorAnchor.get(command.actorId)
-  if (anchor === undefined) return null
+  if (anchor === undefined) return
 
   for (const id of ctx.clusters.membersOf(anchor)) {
     ctx.state.x[id] = ctx.state.x[id]! + command.dx
     ctx.state.y[id] = ctx.state.y[id]! + command.dy
   }
-
-  return trySnap(ctx, anchor)
 }
 
-function applyDrop(ctx: CommandContext, command: Drop): void {
+function applyDrop(ctx: CommandContext, command: Drop): Merge[] {
   const anchor = ctx.actorAnchor.get(command.actorId)
-  if (anchor === undefined) return
+  if (anchor === undefined) return []
+
+  const merges = trySnap(ctx, anchor)
 
   for (const id of ctx.clusters.membersOf(anchor)) {
     ctx.state.heldBy[id] = -1
   }
   ctx.actorAnchor.delete(command.actorId)
+
+  return merges
 }
 
-// Checks the moved piece's real grid neighbours, not proximity to any piece. Once merged, a cluster's
-// internal offsets never drift, every move applies the same delta to every member, so correcting only the
-// anchor's own existing cluster against a neighbour is enough, the neighbour's cluster is already
-// internally consistent. Carried over from src/stress/main.ts's trySnap, generalised to PuzzleState.
-function trySnap(ctx: CommandContext, pieceId: number): Merge | null {
+export interface SnapTarget {
+  neighborId: number
+  target: Point
+}
+
+// The pure half of snapping: every real, unconnected grid neighbour this piece is currently close
+// enough to that releasing it right now would merge with, each with the exact rigid position that merge
+// would correct it to. Applies nothing. Exists so render/ can preview a snap while a piece is still
+// being dragged, e.g. to glow every piece it would connect to at once, not just one, without state/
+// knowing rendering exists and without duplicating this search in two places.
+export function findSnapTargets(ctx: CommandContext, pieceId: number): SnapTarget[] {
   const { state, clusters, snapDistance } = ctx
   const piece = state.pieces[pieceId]!
+  const found: SnapTarget[] = []
+
+  for (const neighborId of piece.neighbors) {
+    if (neighborId === null) continue
+    if (clusters.find(pieceId) === clusters.find(neighborId)) continue
+
+    const neighbor = state.pieces[neighborId]!
+    const target: Point = {
+      x: state.x[neighborId]! + (piece.solved.x - neighbor.solved.x),
+      y: state.y[neighborId]! + (piece.solved.y - neighbor.solved.y),
+    }
+    const current: Point = { x: state.x[pieceId]!, y: state.y[pieceId]! }
+
+    if (Math.hypot(target.x - current.x, target.y - current.y) > snapDistance) continue
+
+    found.push({ neighborId, target })
+  }
+
+  return found
+}
+
+// Checks every one of the moved piece's real grid neighbours, not proximity to any piece, and merges
+// with each one currently close enough, not just the first: a piece set into a gap between several
+// already-placed neighbours (a corner between two solved edges, or the last piece in a hole surrounded
+// on every side) connects to all of them in one drop, the way it would physically. Once merged, a
+// cluster's internal offsets never drift, every move applies the same delta to every member, so
+// correcting the anchor's own cluster against each neighbour in turn is enough, re-reading its position
+// fresh before each one means a correction made for an earlier neighbour is respected when checking the
+// next, rather than every distance being judged against where the piece was before any of them applied.
+// Carried over from src/stress/main.ts's trySnap, generalised to PuzzleState.
+function trySnap(ctx: CommandContext, pieceId: number): Merge[] {
+  const { state, clusters, snapDistance } = ctx
+  const piece = state.pieces[pieceId]!
+  const merges: Merge[] = []
 
   for (const neighborId of piece.neighbors) {
     if (neighborId === null) continue
@@ -118,10 +166,10 @@ function trySnap(ctx: CommandContext, pieceId: number): Merge | null {
 
     const merge: Merge = { type: 'Merge', a: pieceId, b: neighborId }
     applyMerge(ctx, merge, target)
-    return merge
+    merges.push(merge)
   }
 
-  return null
+  return merges
 }
 
 // The position correction and the union both belong to one merge: correcting first, then unioning, is

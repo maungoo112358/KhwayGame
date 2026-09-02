@@ -12,8 +12,8 @@ export type { ClusterIndex } from './unionFind'
 export { buildSpatialHash, pickAt, pickAtNaive, pointInPieceMask } from './spatialHash'
 export type { SpatialHash } from './spatialHash'
 
-export { applyCommand, createCommandContext } from './commands'
-export type { Command, PickUp, Move, Drop, Merge, CommandContext } from './commands'
+export { applyCommand, createCommandContext, findSnapTargets } from './commands'
+export type { Command, PickUp, Move, Drop, Merge, CommandContext, SnapTarget } from './commands'
 
 export { serializePuzzleState, restorePuzzleState } from './save'
 export type { SavedPuzzleState } from './save'
