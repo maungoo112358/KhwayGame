@@ -10,6 +10,7 @@ import {
   applyCommand, buildSpatialHash, createClusterIndex, createCommandContext, findSnapTargets, isSolved, pickAt,
   type ClusterIndex, type CommandContext, type PuzzleState, type SpatialHash,
 } from '../state'
+import { createReferenceSlider } from '../ui/referenceImage'
 
 const LOCAL_ACTOR = 0
 // Absolute scale, not a multiplier of some fit-to-table value: 1 is a piece's real baked size on
@@ -251,6 +252,44 @@ export function createBoard(app: Application, host: HTMLElement, bake: PuzzleBui
   }
   updateZoomLimitBorder()
 
+  // Right-click reference popup, Phase 8 B3, see D32. A Pixi sprite and border, not a DOM overlay: it
+  // has to sit inside the same canvas as the real pieces, added to the stage here, before `board` goes
+  // on at the very end of this function, so a dragged piece (a `board` child) paints over it through
+  // ordinary Pixi z-order, the same reason a real piece would cover a photo lying underneath it on a
+  // table. A DOM element can never do that, DOM stacking is all-or-nothing against a whole `<canvas>`,
+  // it cannot interleave with content painted inside one.
+  const referenceTexture = new Texture({ source: new ImageSource({ resource: treatedImage }) })
+  const referenceSprite = new Sprite(referenceTexture)
+  referenceSprite.anchor.set(0.5)
+  const referenceBorder = new Graphics()
+    .rect(-bake.working.w / 2, -bake.working.h / 2, bake.working.w, bake.working.h)
+    .stroke({ width: 2, color: 0x000000, alignment: 1 })
+  const referenceContainer = new Container()
+  referenceContainer.addChild(referenceSprite, referenceBorder)
+  referenceContainer.visible = false
+  app.stage.addChild(referenceContainer)
+
+  // The slider is the one piece of this feature that stays DOM, an ordinary form control, but its
+  // screen position still has to track the Pixi sprite's own size (see updateReferenceTransform), so
+  // it keeps sitting just below the picture rather than drifting away from it as the player zooms.
+  const referenceSlider = createReferenceSlider((opacity) => {
+    referenceSprite.alpha = opacity
+  })
+  host.appendChild(referenceSlider.element)
+
+  function updateReferenceTransform(): void {
+    referenceContainer.position.set(host.clientWidth / 2, host.clientHeight / 2)
+    referenceContainer.scale.set(scale)
+    referenceSlider.setTop(host.clientHeight / 2 + (bake.working.h * scale) / 2 + 20)
+  }
+  updateReferenceTransform()
+
+  canvas.addEventListener('contextmenu', (event) => {
+    event.preventDefault()
+    referenceContainer.visible = !referenceContainer.visible
+    referenceSlider.setVisible(referenceContainer.visible)
+  })
+
   canvas.addEventListener(
     'wheel',
     (event) => {
@@ -269,6 +308,7 @@ export function createBoard(app: Application, host: HTMLElement, bake: PuzzleBui
       board.scale.set(scale)
       clampBoardPosition()
       updateZoomLimitBorder()
+      updateReferenceTransform()
       commandCtx.snapDistance = baseSnapDistance / scale
     },
     { passive: false },
