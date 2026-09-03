@@ -18,6 +18,12 @@ const LOCAL_ACTOR = 0
 const MAX_ZOOM = 5
 const INITIAL_ZOOM = 1
 const ZOOM_STEP = 1.15
+// The snap itself stays instant, deliberately, per art-direction.md and D30, real pieces click into
+// place rather than glide there. This is the "settle" that plays right after: a brief pop up past its
+// resting scale and back down, on the two pieces a Merge actually just joined. Experimental, same
+// spirit as GLOW_TINT below, judge it live before spending more on it.
+const BOUNCE_DURATION_MS = 180
+const BOUNCE_PEAK_SCALE = 1.12
 // Experimental: a warm highlight on whichever piece the one being dragged would connect to if released
 // right now. Snapping itself only happens on drop (see state/commands.ts), so without some hint the
 // player has no idea a release is about to do anything until it already has. Plain Sprite.tint rather
@@ -62,8 +68,7 @@ export function createBoard(app: Application, host: HTMLElement, bake: PuzzleBui
 
   function moveSprite(id: number): void {
     const sprite = spritesById.get(id)!
-    const piece = state.pieces[id]!
-    sprite.position.set(state.x[id]! - piece.anchor.x, state.y[id]! - piece.anchor.y)
+    sprite.position.set(state.x[id]!, state.y[id]!)
   }
 
   // Every piece the currently dragged piece would connect to on release glows at once, not just one: a
@@ -80,6 +85,30 @@ export function createBoard(app: Application, host: HTMLElement, bake: PuzzleBui
     }
     glowingIds = ids
   }
+
+  // Start time (performance.now(), real elapsed milliseconds, not a frame count) per piece currently
+  // mid-bounce. A ticker callback below reads this every frame and writes the corresponding sprite's
+  // scale; startBounce only ever records when a bounce began, the callback owns the actual animating.
+  const bouncingSince = new Map<number, number>()
+  function startBounce(id: number): void {
+    bouncingSince.set(id, performance.now())
+  }
+  app.ticker.add(() => {
+    if (bouncingSince.size === 0) return
+    const now = performance.now()
+    for (const [id, start] of bouncingSince) {
+      const t = (now - start) / BOUNCE_DURATION_MS
+      if (t >= 1) {
+        spritesById.get(id)!.scale.set(1)
+        bouncingSince.delete(id)
+        continue
+      }
+      // sin(t * pi) is 0 at t=0, rises smoothly to 1 exactly at the midpoint (t=0.5), back to 0 at
+      // t=1: one smooth pulse up to BOUNCE_PEAK_SCALE and back to resting size, not a sharp triangle.
+      const scale = 1 + (BOUNCE_PEAK_SCALE - 1) * Math.sin(t * Math.PI)
+      spritesById.get(id)!.scale.set(scale)
+    }
+  })
 
   // Re-bakes one piece with the rim punched out wherever a real, currently connected neighbour covers
   // it, then swaps the sprite over to that fresh bitmap. AssembledPiece already carries every field
@@ -113,8 +142,18 @@ export function createBoard(app: Application, host: HTMLElement, bake: PuzzleBui
   // Merge. preDragMembers is a snapshot of the dragged piece's cluster taken before this drop, so pieces
   // that came from "the other side" of any of those merges can be told apart from ones that were already
   // together, without state/ needing to know rendering exists.
-  function rebakeAcrossMerge(preDragMembers: ReadonlySet<number>, anchorId: number): void {
+  //
+  // Returns the same "gained a connection" set it rebaked, so a caller wanting to react to every real
+  // seam that just formed (the bounce settle effect below) can reuse this exact computation rather than
+  // reading trySnap's own Merge[] return value, which under-reports: once a dragged piece unions with
+  // any one already-connected neighbour, every other neighbour already sharing that neighbour's cluster
+  // reads as "already merged" to trySnap's own union-find check and never gets its own Merge entry,
+  // even though it is a real seam that just formed. A center piece dropped into a fully solved ring of
+  // 4 neighbours is a real case of this, not a corner case: trySnap reports exactly one Merge, but four
+  // seams actually just closed.
+  function rebakeAcrossMerge(preDragMembers: ReadonlySet<number>, anchorId: number): ReadonlySet<number> {
     const allMembers = clusters.membersOf(anchorId)
+    const gainedConnectionIds = new Set<number>()
     for (const id of allMembers) {
       const wasOnDraggedSide = preDragMembers.has(id)
       const piece = state.pieces[id]!
@@ -122,8 +161,12 @@ export function createBoard(app: Application, host: HTMLElement, bake: PuzzleBui
         if (neighborId === null || !allMembers.has(neighborId)) return false
         return preDragMembers.has(neighborId) !== wasOnDraggedSide
       })
-      if (gainedConnection) rebakeConnected(id)
+      if (gainedConnection) {
+        rebakeConnected(id)
+        gainedConnectionIds.add(id)
+      }
     }
+    return gainedConnectionIds
   }
 
   // Fixed at a real, meaningful zoom on load, not fit-to-viewport: fitting the whole table into view
@@ -316,7 +359,14 @@ export function createBoard(app: Application, host: HTMLElement, bake: PuzzleBui
           // cluster union and all, while every sprite kept rendering wherever the mouse physically left
           // it, looking like nothing snapped at all.
           for (const memberId of clusters.membersOf(draggingPiece.pieceId)) moveSprite(memberId)
-          rebakeAcrossMerge(preDragMembers, draggingPiece.pieceId)
+
+          // Every piece that gained a real connection this drop, not trySnap's own merges: see
+          // rebakeAcrossMerge's comment, a piece dropped into a fully solved gap can close several real
+          // seams at once while trySnap's union-find only ever reports the first, the rest already read
+          // as "same cluster" the instant that first one unions. Only these pieces, not every member of
+          // either whole cluster: a big already-solved region merging with one more piece should not
+          // pulse as a whole, only the join itself is new.
+          for (const id of rebakeAcrossMerge(preDragMembers, draggingPiece.pieceId)) startBounce(id)
 
           // isSolved can only newly become true right after a merge, nothing else changes cluster
           // membership. Checked here rather than every frame, once per merge is the only time it can
@@ -340,7 +390,12 @@ export function createBoard(app: Application, host: HTMLElement, bake: PuzzleBui
     const texture = new Texture({ source: sources[piece.atlas]!, frame })
 
     const sprite = new Sprite(texture)
-    sprite.position.set(state.x[piece.id]! - piece.anchor.x, state.y[piece.id]! - piece.anchor.y)
+    // Pivoted at the piece's own anchor point (its solved position, expressed as a local offset from
+    // the texture's own top-left corner) rather than left at the texture's default (0, 0) origin, so a
+    // scale animation (see startBounce below) pops outward from a point on the piece itself, not from
+    // its top-left corner, which would read as the piece also sliding as it grew.
+    sprite.pivot.set(piece.anchor.x, piece.anchor.y)
+    sprite.position.set(state.x[piece.id]!, state.y[piece.id]!)
     spritesById.set(piece.id, sprite)
     board.addChild(sprite)
   }
