@@ -96,7 +96,13 @@ async function startPuzzle(raw: ImageBitmap, targetPieces: number, initialGrid: 
   // Without this, the scattered block sits pinned to the table's top-left corner (see centerPlacement),
   // stranded far from the center of the much bigger table, invisible again the moment the player zooms
   // out past it and back in anywhere else.
-  centerPlacement(state, tableBounds, used)
+  //
+  // topClearance pushes the block up from dead-center by roughly half the reference popup's own height
+  // at the board's initial zoom (1x, so table units and screen pixels match 1:1 at load), plus a small
+  // gap, so pieces start out sitting above the popup rather than dead center on top of it, which is
+  // exactly where both the block and the popup wanted to be otherwise, see D32/D34.
+  const topClearance = bake.working.h / 2 + 40
+  centerPlacement(state, tableBounds, used, topClearance)
 
   createBoard(app, document.body, bake, state, tableBounds, bakeSource, () => {
     const winScreen = createWinScreen(() => winScreen.element.remove())

@@ -346,6 +346,7 @@ export function createBoard(app: Application, host: HTMLElement, bake: PuzzleBui
     referenceContainer.position.set(host.clientWidth / 2, host.clientHeight / 2)
     referenceContainer.scale.set(scale)
     referenceSlider.setTop(host.clientHeight / 2 + (bake.working.h * scale) / 2 + 20)
+    referenceSlider.setWidth(bake.working.w * scale)
   }
   updateReferenceTransform()
 
@@ -359,17 +360,21 @@ export function createBoard(app: Application, host: HTMLElement, bake: PuzzleBui
     'wheel',
     (event) => {
       event.preventDefault()
-      const bounds = canvas.getBoundingClientRect()
 
-      const cursorX = event.clientX - bounds.left
-      const cursorY = event.clientY - bounds.top
-      const contentX = (cursorX - board.position.x) / board.scale.x
-      const contentY = (cursorY - board.position.y) / board.scale.y
+      // Anchored to the screen center, not the cursor: zooming toward the mouse (the earlier
+      // behaviour) recentres the camera on wherever the mouse happens to be on every scroll tick, so
+      // zooming out and back in rarely lands you back where you started, and it never agrees with the
+      // reference popup, which is always fixed to this same screen center. Anchoring here instead makes
+      // a zoom in/out round trip repeatable, and keeps the board and the popup in the same frame.
+      const anchorX = host.clientWidth / 2
+      const anchorY = host.clientHeight / 2
+      const contentX = (anchorX - board.position.x) / board.scale.x
+      const contentY = (anchorY - board.position.y) / board.scale.y
 
       const factor = event.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP
       scale = clamp(scale * factor, minZoomToFit(), MAX_ZOOM)
 
-      board.position.set(cursorX - contentX * scale, cursorY - contentY * scale)
+      board.position.set(anchorX - contentX * scale, anchorY - contentY * scale)
       board.scale.set(scale)
       clampBoardPosition()
       updateZoomLimitBorder()

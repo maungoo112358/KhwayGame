@@ -151,9 +151,15 @@ export function scatterPieces(state: PuzzleState, bounds: { w: number; h: number
 // anywhere else, and every piece is still up in that corner, off screen. Centering means any zoom-in
 // from the fully-zoomed-out view lands close to where the pieces actually are. tableBounds is always at
 // least as big as used on both axes (it is defined as the max of the two), so both offsets are >= 0.
-export function centerPlacement(state: PuzzleState, tableBounds: { w: number; h: number }, used: PlacementBounds): void {
+//
+// topClearance shifts the vertical anchor up from dead-center by that many table-space units, still
+// clamped to >= 0 so it can never push the block above the table's own top edge. Table-space, not
+// screen-space, on purpose: this module knows nothing about a camera or a screen, see the architecture
+// boundary in CLAUDE.md, so the caller (which does) converts whatever it needs cleared into a plain
+// number before calling in.
+export function centerPlacement(state: PuzzleState, tableBounds: { w: number; h: number }, used: PlacementBounds, topClearance: number = 0): void {
   const offsetX = (tableBounds.w - used.w) / 2
-  const offsetY = (tableBounds.h - used.h) / 2
+  const offsetY = Math.max(0, (tableBounds.h - used.h) / 2 - topClearance)
   for (let id = 0; id < state.pieceCount; id++) {
     state.x[id] = state.x[id]! + offsetX
     state.y[id] = state.y[id]! + offsetY

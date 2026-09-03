@@ -7,8 +7,13 @@
 export interface ReferenceSlider {
   element: HTMLElement
   setTop(px: number): void
+  setWidth(px: number): void
   setVisible(visible: boolean): void
 }
+
+// A floor under setWidth's px, not a default: a slider narrower than its own thumb stops being usable,
+// which real zoom-out levels reach easily since the picture itself shrinks with them.
+const MIN_SLIDER_WIDTH = 120
 
 export function createReferenceSlider(onOpacityChange: (opacity: number) => void): ReferenceSlider {
   const slider = document.createElement('input')
@@ -18,7 +23,7 @@ export function createReferenceSlider(onOpacityChange: (opacity: number) => void
   slider.step = '0.01'
   slider.value = '1'
   slider.style.cssText = `
-    position: fixed; left: 50%; transform: translateX(-50%); width: 220px;
+    position: fixed; left: 50%; transform: translateX(-50%);
     display: none; z-index: 500;
   `
   slider.addEventListener('input', () => onOpacityChange(Number(slider.value)))
@@ -27,6 +32,9 @@ export function createReferenceSlider(onOpacityChange: (opacity: number) => void
     element: slider,
     setTop(px: number): void {
       slider.style.top = `${px}px`
+    },
+    setWidth(px: number): void {
+      slider.style.width = `${Math.max(px, MIN_SLIDER_WIDTH)}px`
     },
     setVisible(visible: boolean): void {
       slider.style.display = visible ? 'block' : 'none'
