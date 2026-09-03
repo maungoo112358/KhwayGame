@@ -4,7 +4,7 @@
 // this module only ever renders and interacts with whatever PuzzleState it is handed.
 
 import type { Application } from 'pixi.js'
-import { Container, Graphics, ImageSource, Rectangle, Sprite, Texture } from 'pixi.js'
+import { Container, Graphics, ImageSource, Rectangle, Sprite, Texture, TilingSprite } from 'pixi.js'
 import { bakePiece, type AssembledPiece, type PuzzleBuild } from '../core'
 import {
   applyCommand, buildSpatialHash, createClusterIndex, createCommandContext, findSnapTargets, isSolved, pickAt,
@@ -37,6 +37,54 @@ function clamp(value: number, low: number, high: number): number {
   return Math.min(Math.max(value, low), high)
 }
 
+// A tileable grain texture for the table, warm oat per art-direction.md's starting palette, the same
+// tone the flat background already used. A flat fill looks identical no matter where the camera is
+// pointed, so panning has nothing to visibly slide past. Wood grain, not a scatter of soft round dots:
+// dots at this density read as mottled skin/pores, first version tried that and it looked wrong. Grain
+// lines are also better motion cues than dots, a line sliding sideways is easy to track by eye. This
+// texture goes on tableLayer (see below), the same moving world the pieces live in, not a screen-space
+// overlay, so the grain actually slides when the camera pans.
+function createTableTexture(): Texture {
+  const size = 320
+  const canvas = document.createElement('canvas')
+  canvas.width = size
+  canvas.height = size
+  const ctx = canvas.getContext('2d')!
+  ctx.fillStyle = '#EDE6DA'
+  ctx.fillRect(0, 0, size, size)
+
+  // Long, gently wavy streaks running roughly left to right, real wood grain drifts rather than
+  // running dead straight. Sparse and low opacity on purpose, this is meant to read as a material,
+  // not compete with the pieces sitting on top of it.
+  const lineCount = 12
+  for (let i = 0; i < lineCount; i++) {
+    const baseY = (i + 0.5) * (size / lineCount) + (Math.random() - 0.5) * 8
+    const dark = Math.random() < 0.6
+    ctx.strokeStyle = dark ? 'rgba(74, 68, 60, 0.07)' : 'rgba(255, 255, 255, 0.06)'
+    ctx.lineWidth = 1 + Math.random()
+    ctx.beginPath()
+    ctx.moveTo(0, baseY)
+    for (let x = 0; x <= size; x += 16) {
+      const wobble = Math.sin((x / size) * Math.PI * 2 + i) * 3
+      ctx.lineTo(x, baseY + wobble)
+    }
+    ctx.stroke()
+  }
+
+  // A few small knots/flecks, sparse, not the dominant feature.
+  for (let i = 0; i < 25; i++) {
+    const x = Math.random() * size
+    const y = Math.random() * size
+    const radius = Math.random() * 1 + 0.4
+    ctx.fillStyle = 'rgba(74, 68, 60, 0.06)'
+    ctx.beginPath()
+    ctx.arc(x, y, radius, 0, Math.PI * 2)
+    ctx.fill()
+  }
+
+  return new Texture({ source: new ImageSource({ resource: canvas }) })
+}
+
 export interface Board {
   container: Container
   clusters: ClusterIndex
@@ -51,6 +99,17 @@ export interface Board {
 export function createBoard(app: Application, host: HTMLElement, bake: PuzzleBuild, state: PuzzleState, tableBounds: { w: number; h: number }, treatedImage: ImageBitmap, onSolved?: () => void): Board {
   const sources = bake.atlases.map((atlas) => new ImageSource({ resource: atlas }))
   const board = new Container()
+
+  // A separate container, not a child of `board`, even though it needs the exact same pan/zoom
+  // transform (kept in sync at the end of clampBoardPosition below). It has to be its own stage child
+  // so it can sit under the reference popup in z-order: the popup is added to the stage before `board`
+  // so a dragged piece paints over it, but this background isn't a piece, it's the table the popup
+  // lies on, and a table has to be under a photo lying on it, not over it. Added to the stage here,
+  // before the popup gets created, so its z-order is locked in early.
+  const tableLayer = new Container()
+  const tableBackground = new TilingSprite({ texture: createTableTexture(), width: tableBounds.w, height: tableBounds.h })
+  tableLayer.addChild(tableBackground)
+  app.stage.addChild(tableLayer)
 
   // Spatial hash: cell size from real data, the square root of average area per piece, not a guess.
   const cellSize = Math.sqrt((bake.working.w * bake.working.h) / bake.pieces.length)
@@ -210,6 +269,12 @@ export function createBoard(app: Application, host: HTMLElement, bake: PuzzleBui
       ? (tableBounds.h - visibleHeight) / 2
       : clamp(-board.position.y / board.scale.y, 0, tableBounds.h - visibleHeight)
     board.position.y = -topEdgeY * board.scale.y
+
+    // tableLayer is a separate stage child (see its own comment above), not a child of `board`, so it
+    // does not inherit board's transform for free. Every place board's position or scale changes calls
+    // this function right after, so copying here in one spot keeps the two in lockstep everywhere.
+    tableLayer.position.set(board.position.x, board.position.y)
+    tableLayer.scale.set(board.scale.x, board.scale.y)
   }
   clampBoardPosition()
 
