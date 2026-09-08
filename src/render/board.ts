@@ -356,6 +356,64 @@ export function createBoard(app: Application, host: HTMLElement, bake: PuzzleBui
     referenceSlider.setVisible(referenceContainer.visible)
   })
 
+  // Reference-assist toggle: a difficulty knob, off by default, see D32/D34 and the design discussion
+  // that led here. Every piece already knows its own true position (piece.solved, the exact coordinate
+  // space the popup itself is drawn in), so with this on, releasing a piece near its own correct spot on
+  // the popup is treated the same as releasing it in its correct spot on the real board, see
+  // tryReferencePlacement below. Off by default so the ordinary game is unaffected unless a player
+  // deliberately opts in.
+  let assistMode = false
+  const assistButton = document.createElement('button')
+  assistButton.type = 'button'
+  assistButton.textContent = 'Assist: off'
+  assistButton.style.cssText = `
+    position: fixed; top: 12px; left: 12px; z-index: 500;
+    padding: 6px 10px; font: 13px sans-serif; cursor: pointer;
+  `
+  assistButton.addEventListener('click', () => {
+    assistMode = !assistMode
+    assistButton.textContent = assistMode ? 'Assist: on' : 'Assist: off'
+  })
+  host.appendChild(assistButton)
+
+  // Reuses the ordinary Move/Drop/trySnap machinery afterward (see the pointerup handler below), this
+  // only ever corrects where the drag left the piece before that runs, exactly as if the player had
+  // dropped it there by hand, so it plays nicely with merges, win condition, and save/resume without any
+  // of them needing to know this happened. Moving the anchor piece by the delta to its own solved
+  // position is enough for the whole cluster, not just one call per member: a cluster's internal offsets
+  // are already exact once merged (see trySnap's own comment), so every other member is already sitting
+  // the correct distance from the anchor, one shared delta lands all of them on their own correct spot
+  // too. Expressed as a Move, not a direct state.x/y write, state/commands.ts is explicit that nothing
+  // pokes the typed arrays directly, so a future replayed command stream still makes sense.
+  // baseSnapDistance is the same screen-pixel tolerance ordinary snapping already uses (see its own
+  // comment above), reused here for a consistent feel, not a separate number.
+  //
+  // Compares the piece's own tracked screen position (state.x/y run back through the board's transform)
+  // against the target, not the mouse cursor's position. Those two are only the same point if the player
+  // happened to grab the piece exactly on its internal anchor, which is rarely where anyone actually
+  // clicks, most people grab wherever looks convenient. Comparing the cursor read a piece as "too far
+  // away" even when it was visually placed exactly right, since the two points differ by however far
+  // off-anchor the original grab was. Call this only after the caller has already applied the final
+  // pointer-delta Move for this release, so state.x/y reflects where the piece really ended up.
+  function tryReferencePlacement(pieceId: number): boolean {
+    if (!assistMode || !referenceContainer.visible) return false
+
+    const piece = state.pieces[pieceId]!
+    const pieceScreenX = board.position.x + state.x[pieceId]! * board.scale.x
+    const pieceScreenY = board.position.y + state.y[pieceId]! * board.scale.y
+    const targetX = referenceContainer.position.x + (piece.solved.x - bake.working.w / 2) * scale
+    const targetY = referenceContainer.position.y + (piece.solved.y - bake.working.h / 2) * scale
+
+    const distance = Math.hypot(pieceScreenX - targetX, pieceScreenY - targetY)
+    if (distance > baseSnapDistance) return false
+
+    const dx = piece.solved.x - state.x[pieceId]!
+    const dy = piece.solved.y - state.y[pieceId]!
+    applyCommand(commandCtx, { type: 'Move', actorId: LOCAL_ACTOR, dx, dy })
+    for (const memberId of clusters.membersOf(pieceId)) moveSprite(memberId)
+    return true
+  }
+
   canvas.addEventListener(
     'wheel',
     (event) => {
@@ -452,6 +510,11 @@ export function createBoard(app: Application, host: HTMLElement, bake: PuzzleBui
           applyCommand(commandCtx, { type: 'Move', actorId: LOCAL_ACTOR, dx: finalDeltaX, dy: finalDeltaY })
           for (const memberId of clusters.membersOf(draggingPiece.pieceId)) moveSprite(memberId)
         }
+
+        // Checked once state.x/y reflects exactly where the piece really ended up, not before: see
+        // tryReferencePlacement's own comment for why comparing anything earlier (the raw cursor) was
+        // the actual bug.
+        tryReferencePlacement(draggingPiece.pieceId)
 
         // Copied, not just referenced: ClusterIndex.membersOf hands back its live internal Set, and a
         // union that absorbs the dragged piece's own cluster into the bigger side would mutate this
