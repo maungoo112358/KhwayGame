@@ -6,6 +6,7 @@ import { createSizePicker } from './ui/sizePicker'
 import { createWinScreen } from './ui/winScreen'
 import { chooseGrid, makeRng, workingSize, PUZZLE_BUILD_VERSION, type Grid } from './core'
 import { createPuzzleState, scatterBounds, scatterPieces, centerPlacement } from './state'
+import { main } from './net/nakama'
 
 const { app, backend } = await createApp(document.body)
 
@@ -14,6 +15,14 @@ console.log(`core contract version: ${PUZZLE_BUILD_VERSION}`)
 
 const worker = new Worker(new URL('./worker/treat-worker.ts', import.meta.url), { type: 'module' })
 const pipeline = createPipeline(worker)
+
+
+
+//------------------------------ NAKAMA ------------------------------
+
+  main();
+
+//------------------------------### NAKAMA ###------------------------------
 
 function showStatus(text: string): HTMLElement {
   let status = document.getElementById('status')
