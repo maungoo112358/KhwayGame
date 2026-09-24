@@ -5,6 +5,10 @@ interface TestStorageValue{
 
 const TEST_COLLECTION = "test";
 const TEST_KEY = "test_value";
+const SNAPSHOT_COLLECTION = "snapshot_collection";
+const SNAPSHOT_KEY = "snapshot_key";
+const SAVE_SNAPSHOT = "save_snapshot";
+const LOAD_SNAPSHOT = "load_snapshot";
 
 
 let InitModule: nkruntime.InitModule =
@@ -12,8 +16,10 @@ let InitModule: nkruntime.InitModule =
     
     logger.info("KhwayGame runtime module loaded.");
 
-    initializer.registerRpc("hello_world %s", rpcHelloWorld);
-    initializer.registerRpc("storage_test %s", rpcStorageTest);
+    initializer.registerRpc("hello_world", rpcHelloWorld);
+    initializer.registerRpc("storage_test", rpcStorageTest);
+    initializer.registerRpc("save_snapshot", rpcSaveSnapshot);
+    initializer.registerRpc("load_snapshot", rpcLoadSnapshot);
 }
 
 let rpcHelloWorld: nkruntime.RpcFunction = 
@@ -66,4 +72,51 @@ let rpcHelloWorld: nkruntime.RpcFunction =
     logger.info("Read Store Value: ", storeValue);
 
     return storeValue;
+  }
+
+  let rpcSaveSnapshot: nkruntime.RpcFunction = 
+  function(ctx: nkruntime.Context, logger: nkruntime.Logger, nk: nkruntime.Nakama, payload: string){
+     if(!ctx.userId){
+      throw new Error("No user ID. This RPC must be called with a user session.");
+    }
+
+    const value: TestStorageValue = {
+      message: JSON.parse(payload),
+      savedAt: Date.now()
+    }
+
+    const writeRequest: nkruntime.StorageWriteRequest = {
+       collection: SNAPSHOT_COLLECTION,
+       key: SNAPSHOT_KEY,
+       userId: ctx.userId,
+       value: value,
+       permissionRead: 1,
+       permissionWrite: 0
+    }
+
+    nk.storageWrite([writeRequest]);
+    logger.info("Save game snapshot sent by player: ", ctx.userId);
+  }
+
+  let rpcLoadSnapshot: nkruntime.RpcFunction =
+  function(ctx: nkruntime.Context, logger: nkruntime.Logger, nk: nkruntime.Nakama){
+     if(!ctx.userId){
+      throw new Error("No user ID. This RPC must be called with a user session.");
+    }
+    
+      const readRequest: nkruntime.StorageReadRequest = {
+      collection: SNAPSHOT_COLLECTION,
+      key: SNAPSHOT_KEY,
+      userId: ctx.userId
+    }
+
+     const objects = nk.storageRead([readRequest]);
+      if(objects.length === 0){
+        throw new Error("Snapshot was saved but could not be read back.");
+      }
+
+    const snapshotData = JSON.stringify(objects[0].value as TestStorageValue);
+    logger.info("Load Snapshot Data: ", snapshotData);
+
+    return snapshotData;
   }
