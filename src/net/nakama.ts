@@ -11,6 +11,12 @@ export const OpCode = {
     CHAT_MESSAGE: 1,
 }
 
+interface TestStorageValue{
+  message: string,
+  savedAt: number
+}
+
+
 function getOrCreateDeviceId(): string{
     let deviceId = localStorage.getItem(DEVICE_ID);
     if(!deviceId){
@@ -25,6 +31,7 @@ export const client = new Client("defaultkey", "127.0.0.1", "7350", useSSL);
 
 let socket: Socket|null = null;
 let currentMatch: Match|null = null;
+let currentSession: Session|null = null;
 
 async function login(): Promise<Session>{
 
@@ -95,10 +102,26 @@ export async function leaveMatch(): Promise<void>{
 //     await getSocket().sendMatchState(currentMatch.match_id, opCode, JSON.stringify(data));
 // }
 
+function getSession(): Session{
+    if(!currentSession){
+        throw new Error("Not logged in. Call start() first.");
+    }
+    return currentSession;
+}
+
+async function storageTest(): Promise<TestStorageValue>{
+    const response = await client.rpc(getSession(), "storage_test", {});
+    const payload = response.payload as TestStorageValue;
+    console.log("Test Storage Payload: ", payload.message);
+    console.log("SaveAt: ",new Date(payload.savedAt).toLocaleDateString());
+    return payload;
+}
+
 async function start(): Promise<void>{
    try{
 
     const session = await login();
+    currentSession = session;
     console.log("Logged in: ",session.user_id);
 
     await connectSocket(session);
@@ -119,6 +142,7 @@ async function start(): Promise<void>{
 export async function main(): Promise<void>{
     try{
         await start();
+        await storageTest();
         await joinLobby();
     }catch(error: unknown){
         console.log("Could not enter lobby: ", error);
