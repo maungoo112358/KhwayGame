@@ -60,7 +60,7 @@ async function saveSnapshot(payload: string): Promise<void>{
 
 async function loadShapshot(match_id: string): Promise<void>{
     try{
-        const response = await client.rpc(getSession(), RPC_LOAD_SNAPSHOT,{});
+        const response = await client.rpc(getSession(), RPC_LOAD_SNAPSHOT,{match_id});
         const payload = response.payload as TestStorageValue;
         console.log("Load Snapshot data: ",payload.message);
     }
